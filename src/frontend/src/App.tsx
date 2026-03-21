@@ -1,6 +1,8 @@
 import {
   ChevronDown,
   ChevronUp,
+  Home,
+  LayoutList,
   Loader2,
   Mic,
   MicOff,
@@ -25,6 +27,7 @@ interface Entry {
 
 type StatusState = "ready" | "listening" | "processing" | "saved" | "error";
 type LookupState = "idle" | "loading" | "found" | "notfound";
+type ActivePage = "home" | "collection";
 
 // ──────────────────────────────────────────────
 // Constants
@@ -32,6 +35,8 @@ type LookupState = "idle" | "loading" | "found" | "notfound";
 const COLOR_CASH = "#00ff88";
 const COLOR_UPI = "#a78bfa";
 const COLOR_BOTH = "#fbbf24";
+const APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbzYj1ZiuGuXG6d4ZSJGYxFlXGfHfNPoTViNT6QkNMMK4PvyhAKdSk4SUQDmqTZZmxr9Rg/exec";
 
 function getTypeColor(type: "cash" | "upi" | "both"): string {
   if (type === "cash") return COLOR_CASH;
@@ -140,6 +145,8 @@ async function lookupMember(
 ): Promise<{ name: string; memberId: string } | null> {
   try {
     const params = new URLSearchParams();
+    params.set("action", "lookup");
+    params.set("sheet", "Members");
     if (query.name) params.set("name", query.name);
     if (query.id) params.set("id", query.id);
     const res = await fetch(`${url}?${params.toString()}`, {
@@ -181,9 +188,471 @@ const labelStyle: React.CSSProperties = {
 };
 
 // ──────────────────────────────────────────────
+// Entry Card (shared between Home + Collection)
+// ──────────────────────────────────────────────
+function EntryCard({ entry, index }: { entry: Entry; index: number }) {
+  const color = getTypeColor(entry.type);
+  const total = entry.cash + entry.upi;
+  return (
+    <div
+      key={entry.id}
+      data-ocid={`entries.item.${index + 1}`}
+      style={{
+        backgroundColor: "#111",
+        border: "1px solid #1e1e1e",
+        borderLeft: `4px solid ${color}`,
+        borderRadius: "8px",
+        padding: "14px 14px 12px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "8px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span
+            style={{
+              fontFamily: "'Syne', sans-serif",
+              fontWeight: 700,
+              fontSize: "15px",
+              color: "#f0f0f0",
+            }}
+          >
+            {entry.name}
+          </span>
+          {entry.memberId && (
+            <span
+              style={{
+                backgroundColor: "#1a1a1a",
+                border: "1px solid #2a2a2a",
+                borderRadius: "4px",
+                padding: "1px 6px",
+                fontSize: "10px",
+                color: "#777",
+                fontFamily: "'JetBrains Mono', monospace",
+              }}
+            >
+              #{entry.memberId}
+            </span>
+          )}
+        </div>
+        <span
+          style={{
+            fontSize: "10px",
+            color: "#444",
+            fontFamily: "'JetBrains Mono', monospace",
+          }}
+        >
+          {entry.time}
+        </span>
+      </div>
+
+      <div style={{ marginBottom: "6px" }}>
+        {entry.type === "cash" && (
+          <span
+            style={{
+              fontSize: "18px",
+              fontWeight: 700,
+              color: COLOR_CASH,
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            ₹{entry.cash.toLocaleString("en-IN")}
+          </span>
+        )}
+        {entry.type === "upi" && (
+          <span
+            style={{
+              fontSize: "18px",
+              fontWeight: 700,
+              color: COLOR_UPI,
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            ₹{entry.upi.toLocaleString("en-IN")}
+          </span>
+        )}
+        {entry.type === "both" && (
+          <div>
+            <span
+              style={{
+                fontSize: "18px",
+                fontWeight: 700,
+                color: COLOR_BOTH,
+                fontFamily: "'JetBrains Mono', monospace",
+              }}
+            >
+              ₹{total.toLocaleString("en-IN")} total
+            </span>
+            <div
+              style={{
+                fontSize: "11px",
+                color: "#666",
+                marginTop: "2px",
+                fontFamily: "'JetBrains Mono', monospace",
+              }}
+            >
+              <span style={{ color: `${COLOR_CASH}99` }}>
+                ₹{entry.cash.toLocaleString("en-IN")} cash
+              </span>
+              {" + "}
+              <span style={{ color: `${COLOR_UPI}99` }}>
+                ₹{entry.upi.toLocaleString("en-IN")} upi
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span
+          style={{
+            backgroundColor: `${color}18`,
+            border: `1px solid ${color}44`,
+            borderRadius: "4px",
+            padding: "1px 6px",
+            fontSize: "9px",
+            color: color,
+            fontFamily: "'JetBrains Mono', monospace",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            fontWeight: 600,
+          }}
+        >
+          {entry.type}
+        </span>
+        {entry.note && (
+          <span
+            style={{
+              fontSize: "12px",
+              color: "#555",
+              fontStyle: "italic",
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            {entry.note}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Collection Page
+// ──────────────────────────────────────────────
+function CollectionPage({ entries }: { entries: Entry[] }) {
+  const cashTotal = entries.reduce((sum, e) => sum + e.cash, 0);
+  const upiTotal = entries.reduce((sum, e) => sum + e.upi, 0);
+  const grandTotal = cashTotal + upiTotal;
+
+  return (
+    <div>
+      {/* Page heading */}
+      <div
+        style={{
+          marginBottom: "20px",
+        }}
+      >
+        <h2
+          style={{
+            fontFamily: "'Syne', sans-serif",
+            fontSize: "22px",
+            fontWeight: 800,
+            color: "#fff",
+            margin: "0 0 4px",
+            letterSpacing: "-0.3px",
+          }}
+        >
+          Today's Collection
+        </h2>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "11px",
+              color: "#555",
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            {formatDate()}
+          </span>
+          <span
+            data-ocid="collection.card"
+            style={{
+              backgroundColor: "#1a1a1a",
+              border: "1px solid #2a2a2a",
+              borderRadius: "12px",
+              padding: "2px 8px",
+              fontSize: "10px",
+              color: "#888",
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            {entries.length} {entries.length === 1 ? "entry" : "entries"}
+          </span>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "10px",
+          marginBottom: "10px",
+        }}
+      >
+        {/* Cash card */}
+        <div
+          data-ocid="collection.cash.card"
+          style={{
+            backgroundColor: "#111",
+            border: `1px solid ${COLOR_CASH}33`,
+            borderTop: `3px solid ${COLOR_CASH}`,
+            borderRadius: "10px",
+            padding: "16px 14px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "9px",
+              color: `${COLOR_CASH}88`,
+              fontFamily: "'JetBrains Mono', monospace",
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              marginBottom: "10px",
+            }}
+          >
+            Cash Total
+          </div>
+          <div
+            style={{
+              fontSize: "26px",
+              fontWeight: 700,
+              color: COLOR_CASH,
+              fontFamily: "'JetBrains Mono', monospace",
+              lineHeight: 1,
+              marginBottom: "4px",
+            }}
+          >
+            ₹{cashTotal.toLocaleString("en-IN")}
+          </div>
+          <div
+            style={{
+              fontSize: "10px",
+              color: "#444",
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            {entries.filter((e) => e.cash > 0).length} txns
+          </div>
+        </div>
+
+        {/* UPI card */}
+        <div
+          data-ocid="collection.upi.card"
+          style={{
+            backgroundColor: "#111",
+            border: `1px solid ${COLOR_UPI}33`,
+            borderTop: `3px solid ${COLOR_UPI}`,
+            borderRadius: "10px",
+            padding: "16px 14px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "9px",
+              color: `${COLOR_UPI}88`,
+              fontFamily: "'JetBrains Mono', monospace",
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              marginBottom: "10px",
+            }}
+          >
+            UPI Total
+          </div>
+          <div
+            style={{
+              fontSize: "26px",
+              fontWeight: 700,
+              color: COLOR_UPI,
+              fontFamily: "'JetBrains Mono', monospace",
+              lineHeight: 1,
+              marginBottom: "4px",
+            }}
+          >
+            ₹{upiTotal.toLocaleString("en-IN")}
+          </div>
+          <div
+            style={{
+              fontSize: "10px",
+              color: "#444",
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            {entries.filter((e) => e.upi > 0).length} txns
+          </div>
+        </div>
+      </div>
+
+      {/* Grand Total card */}
+      <div
+        data-ocid="collection.grand_total.card"
+        style={{
+          backgroundColor: "#141006",
+          border: `1px solid ${COLOR_BOTH}44`,
+          borderRadius: "12px",
+          padding: "20px 18px",
+          marginBottom: "24px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: "9px",
+              color: `${COLOR_BOTH}99`,
+              fontFamily: "'JetBrains Mono', monospace",
+              letterSpacing: "0.18em",
+              textTransform: "uppercase",
+              marginBottom: "8px",
+            }}
+          >
+            Grand Total
+          </div>
+          <div
+            style={{
+              fontSize: "36px",
+              fontWeight: 800,
+              color: COLOR_BOTH,
+              fontFamily: "'JetBrains Mono', monospace",
+              lineHeight: 1,
+              letterSpacing: "-1px",
+            }}
+          >
+            ₹{grandTotal.toLocaleString("en-IN")}
+          </div>
+          <div
+            style={{
+              fontSize: "11px",
+              color: "#555",
+              fontFamily: "'JetBrains Mono', monospace",
+              marginTop: "6px",
+            }}
+          >
+            <span style={{ color: `${COLOR_CASH}77` }}>
+              ₹{cashTotal.toLocaleString("en-IN")} cash
+            </span>
+            <span style={{ color: "#333", margin: "0 6px" }}>+</span>
+            <span style={{ color: `${COLOR_UPI}77` }}>
+              ₹{upiTotal.toLocaleString("en-IN")} upi
+            </span>
+          </div>
+        </div>
+        <div
+          style={{
+            width: "56px",
+            height: "56px",
+            borderRadius: "50%",
+            backgroundColor: `${COLOR_BOTH}18`,
+            border: `2px solid ${COLOR_BOTH}44`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "22px",
+            flexShrink: 0,
+          }}
+        >
+          ₹
+        </div>
+      </div>
+
+      {/* Entries list */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          marginBottom: "12px",
+        }}
+      >
+        <h3
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: "10px",
+            fontWeight: 600,
+            letterSpacing: "0.15em",
+            color: "#555",
+            textTransform: "uppercase",
+            margin: 0,
+          }}
+        >
+          All Entries
+        </h3>
+      </div>
+
+      {entries.length === 0 ? (
+        <div
+          data-ocid="collection.empty_state"
+          style={{
+            backgroundColor: "#111",
+            border: "1px solid #1a1a1a",
+            borderRadius: "12px",
+            padding: "40px 20px",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: "32px", marginBottom: "12px" }}>📋</div>
+          <div
+            style={{
+              color: "#444",
+              fontSize: "13px",
+              fontFamily: "'JetBrains Mono', monospace",
+              marginBottom: "6px",
+            }}
+          >
+            No collections today
+          </div>
+          <div
+            style={{
+              color: "#333",
+              fontSize: "11px",
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            Switch to Home to add entries
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          {entries.map((entry, i) => (
+            <EntryCard key={entry.id} entry={entry} index={i} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
 // Main App
 // ──────────────────────────────────────────────
 export default function App() {
+  // Active page
+  const [activePage, setActivePage] = useState<ActivePage>("home");
+
   // Entries
   const [entries, setEntries] = useState<Entry[]>(() => {
     try {
@@ -218,11 +687,18 @@ export default function App() {
   // Settings
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [webhookInput, setWebhookInput] = useState(
-    () => localStorage.getItem("akpack_webhook_url") || "",
+    () => localStorage.getItem("akpack_webhook_url") || APPS_SCRIPT_URL,
   );
-  const [lookupUrlInput, setLookupUrlInput] = useState(
-    () => localStorage.getItem("akpack_lookup_url") || "",
-  );
+
+  // Auto-initialize Apps Script URL on first load
+  useEffect(() => {
+    if (!localStorage.getItem("akpack_webhook_url")) {
+      localStorage.setItem("akpack_webhook_url", APPS_SCRIPT_URL);
+    }
+    if (!localStorage.getItem("akpack_lookup_url")) {
+      localStorage.setItem("akpack_lookup_url", APPS_SCRIPT_URL);
+    }
+  }, []);
 
   // Check voice support
   useEffect(() => {
@@ -253,12 +729,15 @@ export default function App() {
         mode: "no-cors",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "save",
+          sheet: "Accounts",
           name: newEntry.name,
           memberId: newEntry.memberId,
           type: newEntry.type,
           cash: newEntry.cash,
           upi: newEntry.upi,
           note: newEntry.note,
+          timestamp: new Date().toISOString(),
         }),
       }).catch(() => {});
     }
@@ -327,6 +806,8 @@ export default function App() {
       setTranscript("");
     };
 
+    let resultHandled = false;
+
     recognition.onresult = (e: any) => {
       const result = Array.from(e.results)
         .map((r: any) => r[0].transcript)
@@ -334,6 +815,7 @@ export default function App() {
       setTranscript(result);
 
       if (e.results[e.results.length - 1].isFinal) {
+        resultHandled = true;
         setStatus("processing");
         const parsed = parseTranscript(result);
         if (parsed?.name) {
@@ -346,8 +828,12 @@ export default function App() {
       }
     };
 
-    recognition.onerror = () => {
+    recognition.onerror = (e: any) => {
       setIsListening(false);
+      // Don't show error if we already successfully saved an entry
+      if (resultHandled) return;
+      // Also ignore "no-speech" after recording ends naturally
+      if (e.error === "no-speech" || e.error === "aborted") return;
       setStatus("error");
       setTimeout(() => setStatus("ready"), 2000);
     };
@@ -492,7 +978,7 @@ export default function App() {
             alignItems: "center",
             justifyContent: "space-between",
             paddingTop: "20px",
-            paddingBottom: "20px",
+            paddingBottom: "16px",
           }}
         >
           <h1
@@ -522,774 +1008,681 @@ export default function App() {
           </div>
         </header>
 
-        {/* ── Voice Section ── */}
-        <section
+        {/* ── Tab Switcher ── */}
+        <div
           style={{
             backgroundColor: "#111",
-            border: "1px solid #222",
-            borderRadius: "12px",
-            padding: "28px 20px 20px",
-            marginBottom: "16px",
-            textAlign: "center",
+            border: "1px solid #1e1e1e",
+            borderRadius: "10px",
+            padding: "4px",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "4px",
+            marginBottom: "20px",
           }}
         >
-          {!voiceSupported ? (
-            <p style={{ color: "#f87171", fontSize: "13px", margin: 0 }}>
-              Voice not supported on this browser
-            </p>
-          ) : (
-            <>
-              <button
-                type="button"
-                data-ocid="voice.primary_button"
-                onClick={toggleMic}
-                style={{
-                  width: "80px",
-                  height: "80px",
-                  borderRadius: "50%",
-                  backgroundColor: isListening ? "#0a2a1a" : "#141414",
-                  border: isListening
-                    ? `2px solid ${COLOR_CASH}`
-                    : "2px solid #333",
-                  cursor: "pointer",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  transition: "all 0.2s ease",
-                  marginBottom: "16px",
-                }}
-                aria-label={isListening ? "Stop recording" : "Start recording"}
-              >
-                {isListening ? (
-                  <MicOff size={28} color={COLOR_CASH} />
-                ) : (
-                  <Mic size={28} color="#888" />
-                )}
-              </button>
-
-              <div
-                style={{
-                  minHeight: "40px",
-                  backgroundColor: "#0a0a0a",
-                  border: "1px solid #1a1a1a",
-                  borderRadius: "8px",
-                  padding: "10px 12px",
-                  fontSize: "13px",
-                  color: transcript ? "#ddd" : "#444",
-                  fontStyle: transcript ? "normal" : "italic",
-                  marginBottom: "14px",
-                  textAlign: "left",
-                  lineHeight: 1.5,
-                }}
-              >
-                {transcript || "Tap mic and speak..."}
-              </div>
-
-              <div
-                data-ocid="voice.loading_state"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "11px",
-                  color: currentStatus.color,
-                  fontFamily: "'JetBrains Mono', monospace",
-                  letterSpacing: "0.05em",
-                  textTransform: "uppercase",
-                }}
-              >
-                {currentStatus.dot && (
-                  <span
-                    className="dot-pulse"
-                    style={{
-                      width: "6px",
-                      height: "6px",
-                      borderRadius: "50%",
-                      backgroundColor: currentStatus.color,
-                      display: "inline-block",
-                    }}
-                  />
-                )}
-                {currentStatus.label}
-              </div>
-            </>
-          )}
-        </section>
-
-        {/* ── Manual Entry Form ── */}
-        <section
-          style={{
-            backgroundColor: "#111",
-            border: "1px solid #222",
-            borderRadius: "12px",
-            padding: "20px",
-            marginBottom: "16px",
-          }}
-        >
-          <div
+          <button
+            type="button"
+            data-ocid="nav.home.tab"
+            onClick={() => setActivePage("home")}
             style={{
               display: "flex",
               alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: "16px",
+              justifyContent: "center",
+              gap: "6px",
+              padding: "10px 0",
+              borderRadius: "7px",
+              border: "none",
+              cursor: "pointer",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: "11px",
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              transition: "all 0.15s ease",
+              backgroundColor:
+                activePage === "home" ? "#1e1e1e" : "transparent",
+              color: activePage === "home" ? "#f0f0f0" : "#555",
+              boxShadow:
+                activePage === "home" ? "0 1px 3px rgba(0,0,0,0.4)" : "none",
             }}
           >
-            <h2
+            <Home size={12} />
+            Home
+          </button>
+          <button
+            type="button"
+            data-ocid="nav.collection.tab"
+            onClick={() => setActivePage("collection")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              padding: "10px 0",
+              borderRadius: "7px",
+              border: "none",
+              cursor: "pointer",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: "11px",
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              transition: "all 0.15s ease",
+              backgroundColor:
+                activePage === "collection" ? `${COLOR_CASH}18` : "transparent",
+              color: activePage === "collection" ? COLOR_CASH : "#555",
+              boxShadow:
+                activePage === "collection"
+                  ? `0 1px 3px rgba(0,0,0,0.4), inset 0 0 0 1px ${COLOR_CASH}22`
+                  : "none",
+            }}
+          >
+            <LayoutList size={12} />
+            Collection
+          </button>
+        </div>
+
+        {/* ── Pages ── */}
+        {activePage === "home" ? (
+          <>
+            {/* ── Voice Section ── */}
+            <section
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "10px",
-                fontWeight: 600,
-                letterSpacing: "0.15em",
-                color: "#555",
-                textTransform: "uppercase",
-                margin: 0,
+                backgroundColor: "#111",
+                border: "1px solid #222",
+                borderRadius: "12px",
+                padding: "28px 20px 20px",
+                marginBottom: "16px",
+                textAlign: "center",
               }}
             >
-              Manual Entry
-            </h2>
-            {hasLookupUrl && (
-              <span
+              {!voiceSupported ? (
+                <p style={{ color: "#f87171", fontSize: "13px", margin: 0 }}>
+                  Voice not supported on this browser
+                </p>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    data-ocid="voice.primary_button"
+                    onClick={toggleMic}
+                    style={{
+                      width: "80px",
+                      height: "80px",
+                      borderRadius: "50%",
+                      backgroundColor: isListening ? "#0a2a1a" : "#141414",
+                      border: isListening
+                        ? `2px solid ${COLOR_CASH}`
+                        : "2px solid #333",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transition: "all 0.2s ease",
+                      marginBottom: "16px",
+                    }}
+                    aria-label={
+                      isListening ? "Stop recording" : "Start recording"
+                    }
+                  >
+                    {isListening ? (
+                      <MicOff size={28} color={COLOR_CASH} />
+                    ) : (
+                      <Mic size={28} color="#888" />
+                    )}
+                  </button>
+
+                  <div
+                    style={{
+                      minHeight: "40px",
+                      backgroundColor: "#0a0a0a",
+                      border: "1px solid #1a1a1a",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "13px",
+                      color: transcript ? "#ddd" : "#444",
+                      fontStyle: transcript ? "normal" : "italic",
+                      marginBottom: "14px",
+                      textAlign: "left",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {transcript || "Tap mic and speak..."}
+                  </div>
+
+                  <div
+                    data-ocid="voice.loading_state"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontSize: "11px",
+                      color: currentStatus.color,
+                      fontFamily: "'JetBrains Mono', monospace",
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {currentStatus.dot && (
+                      <span
+                        className="dot-pulse"
+                        style={{
+                          width: "6px",
+                          height: "6px",
+                          borderRadius: "50%",
+                          backgroundColor: currentStatus.color,
+                          display: "inline-block",
+                        }}
+                      />
+                    )}
+                    {currentStatus.label}
+                  </div>
+                </>
+              )}
+            </section>
+
+            {/* ── Manual Entry Form ── */}
+            <section
+              style={{
+                backgroundColor: "#111",
+                border: "1px solid #222",
+                borderRadius: "12px",
+                padding: "20px",
+                marginBottom: "16px",
+              }}
+            >
+              <div
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: "4px",
-                  fontSize: "9px",
-                  color: COLOR_CASH,
-                  letterSpacing: "0.08em",
-                  opacity: 0.7,
+                  justifyContent: "space-between",
+                  marginBottom: "16px",
                 }}
               >
-                <UserCheck size={10} />
-                Sheet Lookup Active
-              </span>
-            )}
-          </div>
-
-          {/* Name + ID */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "10px",
-              marginBottom: "10px",
-            }}
-          >
-            <div>
-              <label htmlFor="manual-name" style={labelStyle}>
-                Name
-              </label>
-              <div style={{ position: "relative" }}>
-                <input
-                  id="manual-name"
-                  data-ocid="manual.input"
-                  type="text"
-                  placeholder="Member name"
-                  value={manualName}
-                  onChange={(e) => handleNameChange(e.target.value)}
+                <h2
                   style={{
-                    ...inputStyle,
-                    paddingRight: nameLookup !== "idle" ? "30px" : "12px",
-                    borderColor:
-                      nameLookup === "found"
-                        ? `${COLOR_CASH}55`
-                        : nameLookup === "notfound"
-                          ? "#f8717144"
-                          : "#222",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "10px",
+                    fontWeight: 600,
+                    letterSpacing: "0.15em",
+                    color: "#555",
+                    textTransform: "uppercase",
+                    margin: 0,
                   }}
-                />
-                <LookupBadge state={nameLookup} />
-              </div>
-            </div>
-            <div>
-              <label htmlFor="manual-member-id" style={labelStyle}>
-                Member ID
-              </label>
-              <div style={{ position: "relative" }}>
-                <input
-                  id="manual-member-id"
-                  data-ocid="manual.input"
-                  type="number"
-                  placeholder="ID"
-                  value={manualMemberId}
-                  onChange={(e) => handleMemberIdChange(e.target.value)}
-                  style={{
-                    ...inputStyle,
-                    paddingRight: idLookup !== "idle" ? "30px" : "12px",
-                    borderColor:
-                      idLookup === "found"
-                        ? `${COLOR_CASH}55`
-                        : idLookup === "notfound"
-                          ? "#f8717144"
-                          : "#222",
-                  }}
-                />
-                <LookupBadge state={idLookup} />
-              </div>
-            </div>
-          </div>
-
-          {/* Type Toggle */}
-          <div style={{ marginBottom: "10px" }}>
-            <p style={{ ...labelStyle, marginBottom: "6px" }}>Type</p>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: "6px",
-              }}
-            >
-              {(["cash", "upi", "both"] as const).map((t) => {
-                const color = getTypeColor(t);
-                const active = manualType === t;
-                return (
-                  <button
-                    type="button"
-                    key={t}
-                    data-ocid={`manual.${t}.toggle`}
-                    onClick={() => setManualType(t)}
+                >
+                  Manual Entry
+                </h2>
+                {hasLookupUrl && (
+                  <span
                     style={{
-                      padding: "8px 0",
-                      borderRadius: "6px",
-                      border: `1px solid ${active ? color : "#222"}`,
-                      backgroundColor: active ? `${color}18` : "#141414",
-                      color: active ? color : "#555",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: "11px",
-                      fontWeight: 600,
-                      letterSpacing: "0.1em",
-                      cursor: "pointer",
-                      textTransform: "uppercase",
-                      transition: "all 0.15s ease",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      fontSize: "9px",
+                      color: COLOR_CASH,
+                      letterSpacing: "0.08em",
+                      opacity: 0.7,
                     }}
                   >
-                    {t}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+                    <UserCheck size={10} />
+                    Sheet Lookup Active
+                  </span>
+                )}
+              </div>
 
-          {/* Amount fields */}
-          {manualType === "both" ? (
-            <div style={{ marginBottom: "10px" }}>
+              {/* Name + ID */}
               <div
                 style={{
                   display: "grid",
                   gridTemplateColumns: "1fr 1fr",
                   gap: "10px",
-                  marginBottom: "6px",
+                  marginBottom: "10px",
                 }}
               >
                 <div>
-                  <label
-                    htmlFor="manual-cash"
-                    style={{ ...labelStyle, color: COLOR_CASH }}
-                  >
-                    Cash ₹
+                  <label htmlFor="manual-name" style={labelStyle}>
+                    Name
                   </label>
-                  <input
-                    id="manual-cash"
-                    data-ocid="manual.cash.input"
-                    type="number"
-                    placeholder="0"
-                    value={manualCash}
-                    onChange={(e) => setManualCash(e.target.value)}
-                    style={{
-                      ...inputStyle,
-                      borderColor: manualCash ? `${COLOR_CASH}44` : "#222",
-                    }}
-                  />
+                  <div style={{ position: "relative" }}>
+                    <input
+                      id="manual-name"
+                      data-ocid="manual.input"
+                      type="text"
+                      placeholder="Member name"
+                      value={manualName}
+                      onChange={(e) => handleNameChange(e.target.value)}
+                      style={{
+                        ...inputStyle,
+                        paddingRight: nameLookup !== "idle" ? "30px" : "12px",
+                        borderColor:
+                          nameLookup === "found"
+                            ? `${COLOR_CASH}55`
+                            : nameLookup === "notfound"
+                              ? "#f8717144"
+                              : "#222",
+                      }}
+                    />
+                    <LookupBadge state={nameLookup} />
+                  </div>
                 </div>
                 <div>
-                  <label
-                    htmlFor="manual-upi"
-                    style={{ ...labelStyle, color: COLOR_UPI }}
-                  >
-                    UPI ₹
+                  <label htmlFor="manual-member-id" style={labelStyle}>
+                    Member ID
                   </label>
-                  <input
-                    id="manual-upi"
-                    data-ocid="manual.upi.input"
-                    type="number"
-                    placeholder="0"
-                    value={manualUpi}
-                    onChange={(e) => setManualUpi(e.target.value)}
-                    style={{
-                      ...inputStyle,
-                      borderColor: manualUpi ? `${COLOR_UPI}44` : "#222",
-                    }}
-                  />
+                  <div style={{ position: "relative" }}>
+                    <input
+                      id="manual-member-id"
+                      data-ocid="manual.input"
+                      type="number"
+                      placeholder="ID"
+                      value={manualMemberId}
+                      onChange={(e) => handleMemberIdChange(e.target.value)}
+                      style={{
+                        ...inputStyle,
+                        paddingRight: idLookup !== "idle" ? "30px" : "12px",
+                        borderColor:
+                          idLookup === "found"
+                            ? `${COLOR_CASH}55`
+                            : idLookup === "notfound"
+                              ? "#f8717144"
+                              : "#222",
+                      }}
+                    />
+                    <LookupBadge state={idLookup} />
+                  </div>
                 </div>
               </div>
-              {manualTotal > 0 && (
+
+              {/* Type Toggle */}
+              <div style={{ marginBottom: "10px" }}>
+                <p style={{ ...labelStyle, marginBottom: "6px" }}>Type</p>
                 <div
                   style={{
-                    textAlign: "right",
-                    fontSize: "12px",
-                    color: COLOR_BOTH,
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr 1fr",
+                    gap: "6px",
                   }}
                 >
-                  Total: ₹{manualTotal.toLocaleString("en-IN")}
+                  {(["cash", "upi", "both"] as const).map((t) => {
+                    const color = getTypeColor(t);
+                    const active = manualType === t;
+                    return (
+                      <button
+                        type="button"
+                        key={t}
+                        data-ocid={`manual.${t}.toggle`}
+                        onClick={() => setManualType(t)}
+                        style={{
+                          padding: "8px 0",
+                          borderRadius: "6px",
+                          border: `1px solid ${active ? color : "#222"}`,
+                          backgroundColor: active ? `${color}18` : "#141414",
+                          color: active ? color : "#555",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          letterSpacing: "0.1em",
+                          cursor: "pointer",
+                          textTransform: "uppercase",
+                          transition: "all 0.15s ease",
+                        }}
+                      >
+                        {t}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ marginBottom: "10px" }}>
-              <label
-                htmlFor="manual-amount"
-                style={{ ...labelStyle, color: typeColor }}
-              >
-                Amount ₹
-              </label>
-              <input
-                id="manual-amount"
-                data-ocid="manual.amount.input"
-                type="number"
-                placeholder="0"
-                value={manualType === "cash" ? manualCash : manualUpi}
-                onChange={(e) =>
-                  manualType === "cash"
-                    ? setManualCash(e.target.value)
-                    : setManualUpi(e.target.value)
-                }
-                style={{
-                  ...inputStyle,
-                  borderColor:
-                    manualCash || manualUpi ? `${typeColor}44` : "#222",
-                }}
-              />
-            </div>
-          )}
+              </div>
 
-          {/* Note */}
-          <div style={{ marginBottom: "14px" }}>
-            <label htmlFor="manual-note" style={labelStyle}>
-              Note
-            </label>
-            <input
-              id="manual-note"
-              data-ocid="manual.note.input"
-              type="text"
-              placeholder="renewal, new membership..."
-              value={manualNote}
-              onChange={(e) => setManualNote(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleManualSave();
-              }}
-              style={inputStyle}
-            />
-          </div>
-
-          <button
-            type="button"
-            data-ocid="manual.submit_button"
-            onClick={handleManualSave}
-            disabled={!manualName.trim()}
-            style={{
-              width: "100%",
-              padding: "12px",
-              borderRadius: "8px",
-              border: "none",
-              backgroundColor: manualName.trim() ? typeColor : "#222",
-              color: manualName.trim() ? "#080808" : "#444",
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: "12px",
-              fontWeight: 700,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              cursor: manualName.trim() ? "pointer" : "not-allowed",
-              transition: "all 0.15s ease",
-            }}
-          >
-            Save Entry
-          </button>
-        </section>
-
-        {/* ── Today's Entries ── */}
-        <section style={{ marginBottom: "16px" }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              marginBottom: "12px",
-            }}
-          >
-            <h2
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "10px",
-                fontWeight: 600,
-                letterSpacing: "0.15em",
-                color: "#555",
-                textTransform: "uppercase",
-                margin: 0,
-              }}
-            >
-              Today's Entries
-            </h2>
-            <span
-              data-ocid="entries.card"
-              style={{
-                backgroundColor: "#1a1a1a",
-                border: "1px solid #2a2a2a",
-                borderRadius: "12px",
-                padding: "2px 8px",
-                fontSize: "11px",
-                color: "#888",
-                fontFamily: "'JetBrains Mono', monospace",
-              }}
-            >
-              {entries.length}
-            </span>
-          </div>
-
-          {entries.length === 0 ? (
-            <div
-              data-ocid="entries.empty_state"
-              style={{
-                backgroundColor: "#111",
-                border: "1px solid #1a1a1a",
-                borderRadius: "12px",
-                padding: "32px 20px",
-                textAlign: "center",
-                color: "#333",
-                fontSize: "13px",
-              }}
-            >
-              No entries today. Start recording!
-            </div>
-          ) : (
-            <div
-              style={{ display: "flex", flexDirection: "column", gap: "8px" }}
-            >
-              {entries.map((entry, i) => {
-                const color = getTypeColor(entry.type);
-                const total = entry.cash + entry.upi;
-                return (
+              {/* Amount fields */}
+              {manualType === "both" ? (
+                <div style={{ marginBottom: "10px" }}>
                   <div
-                    key={entry.id}
-                    data-ocid={`entries.item.${i + 1}`}
                     style={{
-                      backgroundColor: "#111",
-                      border: "1px solid #1e1e1e",
-                      borderLeft: `4px solid ${color}`,
-                      borderRadius: "8px",
-                      padding: "14px 14px 12px",
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "10px",
+                      marginBottom: "6px",
                     }}
                   >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        marginBottom: "8px",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                        }}
+                    <div>
+                      <label
+                        htmlFor="manual-cash"
+                        style={{ ...labelStyle, color: COLOR_CASH }}
                       >
-                        <span
-                          style={{
-                            fontFamily: "'Syne', sans-serif",
-                            fontWeight: 700,
-                            fontSize: "15px",
-                            color: "#f0f0f0",
-                          }}
-                        >
-                          {entry.name}
-                        </span>
-                        {entry.memberId && (
-                          <span
-                            style={{
-                              backgroundColor: "#1a1a1a",
-                              border: "1px solid #2a2a2a",
-                              borderRadius: "4px",
-                              padding: "1px 6px",
-                              fontSize: "10px",
-                              color: "#777",
-                              fontFamily: "'JetBrains Mono', monospace",
-                            }}
-                          >
-                            #{entry.memberId}
-                          </span>
-                        )}
-                      </div>
-                      <span
+                        Cash ₹
+                      </label>
+                      <input
+                        id="manual-cash"
+                        data-ocid="manual.cash.input"
+                        type="number"
+                        placeholder="0"
+                        value={manualCash}
+                        onChange={(e) => setManualCash(e.target.value)}
                         style={{
-                          fontSize: "10px",
-                          color: "#444",
-                          fontFamily: "'JetBrains Mono', monospace",
+                          ...inputStyle,
+                          borderColor: manualCash ? `${COLOR_CASH}44` : "#222",
                         }}
-                      >
-                        {entry.time}
-                      </span>
+                      />
                     </div>
-
-                    <div style={{ marginBottom: "6px" }}>
-                      {entry.type === "cash" && (
-                        <span
-                          style={{
-                            fontSize: "18px",
-                            fontWeight: 700,
-                            color: COLOR_CASH,
-                            fontFamily: "'JetBrains Mono', monospace",
-                          }}
-                        >
-                          ₹{entry.cash.toLocaleString("en-IN")}
-                        </span>
-                      )}
-                      {entry.type === "upi" && (
-                        <span
-                          style={{
-                            fontSize: "18px",
-                            fontWeight: 700,
-                            color: COLOR_UPI,
-                            fontFamily: "'JetBrains Mono', monospace",
-                          }}
-                        >
-                          ₹{entry.upi.toLocaleString("en-IN")}
-                        </span>
-                      )}
-                      {entry.type === "both" && (
-                        <div>
-                          <span
-                            style={{
-                              fontSize: "18px",
-                              fontWeight: 700,
-                              color: COLOR_BOTH,
-                              fontFamily: "'JetBrains Mono', monospace",
-                            }}
-                          >
-                            ₹{total.toLocaleString("en-IN")} total
-                          </span>
-                          <div
-                            style={{
-                              fontSize: "11px",
-                              color: "#666",
-                              marginTop: "2px",
-                              fontFamily: "'JetBrains Mono', monospace",
-                            }}
-                          >
-                            <span style={{ color: `${COLOR_CASH}99` }}>
-                              ₹{entry.cash.toLocaleString("en-IN")} cash
-                            </span>
-                            {" + "}
-                            <span style={{ color: `${COLOR_UPI}99` }}>
-                              ₹{entry.upi.toLocaleString("en-IN")} upi
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "8px",
-                      }}
-                    >
-                      <span
-                        style={{
-                          backgroundColor: `${color}18`,
-                          border: `1px solid ${color}44`,
-                          borderRadius: "4px",
-                          padding: "1px 6px",
-                          fontSize: "9px",
-                          color: color,
-                          fontFamily: "'JetBrains Mono', monospace",
-                          letterSpacing: "0.1em",
-                          textTransform: "uppercase",
-                          fontWeight: 600,
-                        }}
+                    <div>
+                      <label
+                        htmlFor="manual-upi"
+                        style={{ ...labelStyle, color: COLOR_UPI }}
                       >
-                        {entry.type}
-                      </span>
-                      {entry.note && (
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            color: "#555",
-                            fontStyle: "italic",
-                            fontFamily: "'JetBrains Mono', monospace",
-                          }}
-                        >
-                          {entry.note}
-                        </span>
-                      )}
+                        UPI ₹
+                      </label>
+                      <input
+                        id="manual-upi"
+                        data-ocid="manual.upi.input"
+                        type="number"
+                        placeholder="0"
+                        value={manualUpi}
+                        onChange={(e) => setManualUpi(e.target.value)}
+                        style={{
+                          ...inputStyle,
+                          borderColor: manualUpi ? `${COLOR_UPI}44` : "#222",
+                        }}
+                      />
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
+                  {manualTotal > 0 && (
+                    <div
+                      style={{
+                        textAlign: "right",
+                        fontSize: "12px",
+                        color: COLOR_BOTH,
+                      }}
+                    >
+                      Total: ₹{manualTotal.toLocaleString("en-IN")}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginBottom: "10px" }}>
+                  <label
+                    htmlFor="manual-amount"
+                    style={{ ...labelStyle, color: typeColor }}
+                  >
+                    Amount ₹
+                  </label>
+                  <input
+                    id="manual-amount"
+                    data-ocid="manual.amount.input"
+                    type="number"
+                    placeholder="0"
+                    value={manualType === "cash" ? manualCash : manualUpi}
+                    onChange={(e) =>
+                      manualType === "cash"
+                        ? setManualCash(e.target.value)
+                        : setManualUpi(e.target.value)
+                    }
+                    style={{
+                      ...inputStyle,
+                      borderColor:
+                        manualCash || manualUpi ? `${typeColor}44` : "#222",
+                    }}
+                  />
+                </div>
+              )}
 
-        {/* ── Settings ── */}
-        <section
-          style={{
-            backgroundColor: "#111",
-            border: "1px solid #1e1e1e",
-            borderRadius: "12px",
-            overflow: "hidden",
-            marginBottom: "24px",
-          }}
-        >
-          <button
-            type="button"
-            data-ocid="settings.toggle"
-            onClick={() => setSettingsOpen((v) => !v)}
-            style={{
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "14px 16px",
-              backgroundColor: "transparent",
-              border: "none",
-              cursor: "pointer",
-              color: "#555",
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: "10px",
-              letterSpacing: "0.15em",
-              textTransform: "uppercase",
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <Settings size={12} />
-              Settings
-            </span>
-            {settingsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-          </button>
-
-          {settingsOpen && (
-            <div
-              data-ocid="settings.panel"
-              style={{ borderTop: "1px solid #1e1e1e", padding: "16px" }}
-            >
-              {/* Webhook URL */}
-              <label
-                htmlFor="webhook-url"
-                style={{ ...labelStyle, marginBottom: "6px" }}
-              >
-                Google Apps Script — Save URL (Webhook)
-              </label>
-              <input
-                id="webhook-url"
-                data-ocid="settings.input"
-                type="url"
-                placeholder="https://script.google.com/macros/s/..."
-                value={webhookInput}
-                onChange={(e) => setWebhookInput(e.target.value)}
-                style={{
-                  ...inputStyle,
-                  marginBottom: "10px",
-                  fontSize: "12px",
-                }}
-              />
-
-              {/* Lookup URL */}
-              <label
-                htmlFor="lookup-url"
-                style={{
-                  ...labelStyle,
-                  marginBottom: "6px",
-                  color: `${COLOR_CASH}99`,
-                }}
-              >
-                Google Apps Script — Member Lookup URL
-              </label>
-              <p
-                style={{
-                  fontSize: "10px",
-                  color: "#444",
-                  margin: "0 0 6px",
-                  lineHeight: 1.5,
-                }}
-              >
-                A separate script that returns member details by name or ID for
-                auto-fill.
-              </p>
-              <input
-                id="lookup-url"
-                data-ocid="settings.lookup.input"
-                type="url"
-                placeholder="https://script.google.com/macros/s/..."
-                value={lookupUrlInput}
-                onChange={(e) => setLookupUrlInput(e.target.value)}
-                style={{
-                  ...inputStyle,
-                  marginBottom: "10px",
-                  fontSize: "12px",
-                  borderColor: lookupUrlInput ? `${COLOR_CASH}33` : "#222",
-                }}
-              />
+              {/* Note */}
+              <div style={{ marginBottom: "14px" }}>
+                <label htmlFor="manual-note" style={labelStyle}>
+                  Note
+                </label>
+                <input
+                  id="manual-note"
+                  data-ocid="manual.note.input"
+                  type="text"
+                  placeholder="renewal, new membership..."
+                  value={manualNote}
+                  onChange={(e) => setManualNote(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleManualSave();
+                  }}
+                  style={inputStyle}
+                />
+              </div>
 
               <button
                 type="button"
-                data-ocid="settings.save_button"
-                onClick={() => {
-                  localStorage.setItem("akpack_webhook_url", webhookInput);
-                  localStorage.setItem("akpack_lookup_url", lookupUrlInput);
-                  setStatus("saved");
-                  setTimeout(() => setStatus("ready"), 1500);
-                }}
+                data-ocid="manual.submit_button"
+                onClick={handleManualSave}
+                disabled={!manualName.trim()}
                 style={{
-                  padding: "8px 16px",
-                  borderRadius: "6px",
-                  border: `1px solid ${COLOR_CASH}44`,
-                  backgroundColor: `${COLOR_CASH}12`,
-                  color: COLOR_CASH,
+                  width: "100%",
+                  padding: "12px",
+                  borderRadius: "8px",
+                  border: "none",
+                  backgroundColor: manualName.trim() ? typeColor : "#222",
+                  color: manualName.trim() ? "#080808" : "#444",
                   fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  letterSpacing: "0.1em",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  letterSpacing: "0.12em",
                   textTransform: "uppercase",
-                  cursor: "pointer",
+                  cursor: manualName.trim() ? "pointer" : "not-allowed",
+                  transition: "all 0.15s ease",
                 }}
               >
-                Save Settings
+                Save Entry
               </button>
+            </section>
 
-              {/* Apps Script instructions */}
+            {/* ── Today's Entries ── */}
+            <section style={{ marginBottom: "16px" }}>
               <div
                 style={{
-                  marginTop: "16px",
-                  borderTop: "1px solid #1a1a1a",
-                  paddingTop: "14px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  marginBottom: "12px",
                 }}
               >
-                <p
+                <h2
                   style={{
-                    fontSize: "9px",
-                    color: "#444",
-                    letterSpacing: "0.1em",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "10px",
+                    fontWeight: 600,
+                    letterSpacing: "0.15em",
+                    color: "#555",
                     textTransform: "uppercase",
-                    marginBottom: "8px",
+                    margin: 0,
                   }}
                 >
-                  Apps Script — Member Lookup Code
-                </p>
-                <pre
+                  Today's Entries
+                </h2>
+                <span
+                  data-ocid="entries.card"
                   style={{
-                    backgroundColor: "#0a0a0a",
-                    border: "1px solid #1a1a1a",
-                    borderRadius: "6px",
-                    padding: "12px",
-                    fontSize: "10px",
-                    color: "#666",
-                    overflow: "auto",
-                    lineHeight: 1.6,
-                    margin: 0,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
+                    backgroundColor: "#1a1a1a",
+                    border: "1px solid #2a2a2a",
+                    borderRadius: "12px",
+                    padding: "2px 8px",
+                    fontSize: "11px",
+                    color: "#888",
+                    fontFamily: "'JetBrains Mono', monospace",
                   }}
-                >{`function doGet(e) {
+                >
+                  {entries.length}
+                </span>
+              </div>
+
+              {entries.length === 0 ? (
+                <div
+                  data-ocid="entries.empty_state"
+                  style={{
+                    backgroundColor: "#111",
+                    border: "1px solid #1a1a1a",
+                    borderRadius: "12px",
+                    padding: "32px 20px",
+                    textAlign: "center",
+                    color: "#333",
+                    fontSize: "13px",
+                  }}
+                >
+                  No entries today. Start recording!
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                  }}
+                >
+                  {entries.map((entry, i) => (
+                    <EntryCard key={entry.id} entry={entry} index={i} />
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* ── Settings ── */}
+            <section
+              style={{
+                backgroundColor: "#111",
+                border: "1px solid #1e1e1e",
+                borderRadius: "12px",
+                overflow: "hidden",
+                marginBottom: "24px",
+              }}
+            >
+              <button
+                type="button"
+                data-ocid="settings.toggle"
+                onClick={() => setSettingsOpen((v) => !v)}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "14px 16px",
+                  backgroundColor: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "#555",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "10px",
+                  letterSpacing: "0.15em",
+                  textTransform: "uppercase",
+                }}
+              >
+                <span
+                  style={{ display: "flex", alignItems: "center", gap: "6px" }}
+                >
+                  <Settings size={12} />
+                  Settings
+                </span>
+                {settingsOpen ? (
+                  <ChevronUp size={12} />
+                ) : (
+                  <ChevronDown size={12} />
+                )}
+              </button>
+
+              {settingsOpen && (
+                <div
+                  data-ocid="settings.panel"
+                  style={{ borderTop: "1px solid #1e1e1e", padding: "16px" }}
+                >
+                  {/* Unified Apps Script URL */}
+                  <label
+                    htmlFor="webhook-url"
+                    style={{ ...labelStyle, marginBottom: "4px" }}
+                  >
+                    Google Apps Script URL
+                  </label>
+                  <p
+                    style={{
+                      fontSize: "10px",
+                      color: "#444",
+                      margin: "0 0 6px",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Single URL for both member lookup (Members sheet) and saving
+                    daily reports (Accounts sheet).
+                  </p>
+                  <input
+                    id="webhook-url"
+                    data-ocid="settings.input"
+                    type="url"
+                    placeholder="https://script.google.com/macros/s/..."
+                    value={webhookInput}
+                    onChange={(e) => {
+                      setWebhookInput(e.target.value);
+                    }}
+                    style={{
+                      ...inputStyle,
+                      marginBottom: "10px",
+                      fontSize: "12px",
+                      borderColor: webhookInput ? `${COLOR_CASH}33` : "#222",
+                    }}
+                  />
+
+                  <button
+                    type="button"
+                    data-ocid="settings.save_button"
+                    onClick={() => {
+                      localStorage.setItem("akpack_webhook_url", webhookInput);
+                      localStorage.setItem("akpack_lookup_url", webhookInput);
+                      setStatus("saved");
+                      setTimeout(() => setStatus("ready"), 1500);
+                    }}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: "6px",
+                      border: `1px solid ${COLOR_CASH}44`,
+                      backgroundColor: `${COLOR_CASH}12`,
+                      color: COLOR_CASH,
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Save Settings
+                  </button>
+
+                  {/* Apps Script instructions */}
+                  <div
+                    style={{
+                      marginTop: "16px",
+                      borderTop: "1px solid #1a1a1a",
+                      paddingTop: "14px",
+                    }}
+                  >
+                    <p
+                      style={{
+                        fontSize: "9px",
+                        color: "#444",
+                        letterSpacing: "0.1em",
+                        textTransform: "uppercase",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      Apps Script — Member Lookup Code
+                    </p>
+                    <pre
+                      style={{
+                        backgroundColor: "#0a0a0a",
+                        border: "1px solid #1a1a1a",
+                        borderRadius: "6px",
+                        padding: "12px",
+                        fontSize: "10px",
+                        color: "#666",
+                        overflow: "auto",
+                        lineHeight: 1.6,
+                        margin: 0,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-all",
+                      }}
+                    >{`function doGet(e) {
   var sheet = SpreadsheetApp
     .getActiveSpreadsheet()
     .getActiveSheet();
@@ -1315,21 +1708,25 @@ function respond(data) {
     .createTextOutput(out)
     .setMimeType(ContentService.MimeType.JSON);
 }`}</pre>
-                <p
-                  style={{
-                    fontSize: "9px",
-                    color: "#333",
-                    marginTop: "8px",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Deploy as Web App → Execute as: Me → Who has access: Anyone.
-                  Sheet columns: A=MemberID, B=Name.
-                </p>
-              </div>
-            </div>
-          )}
-        </section>
+                    <p
+                      style={{
+                        fontSize: "9px",
+                        color: "#333",
+                        marginTop: "8px",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Deploy as Web App → Execute as: Me → Who has access:
+                      Anyone. Sheet columns: A=MemberID, B=Name.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </section>
+          </>
+        ) : (
+          <CollectionPage entries={entries} />
+        )}
 
         {/* ── Footer ── */}
         <footer
@@ -1339,6 +1736,7 @@ function respond(data) {
             color: "#333",
             fontFamily: "'JetBrains Mono', monospace",
             paddingBottom: "16px",
+            marginTop: "8px",
           }}
         >
           © {new Date().getFullYear()}.{" "}
