@@ -1,4 +1,12 @@
-import { ChevronDown, ChevronUp, Mic, MicOff, Settings } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Mic,
+  MicOff,
+  Settings,
+  UserCheck,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // ──────────────────────────────────────────────
@@ -16,6 +24,7 @@ interface Entry {
 }
 
 type StatusState = "ready" | "listening" | "processing" | "saved" | "error";
+type LookupState = "idle" | "loading" | "found" | "notfound";
 
 // ──────────────────────────────────────────────
 // Constants
@@ -123,6 +132,30 @@ function parseTranscript(
 }
 
 // ──────────────────────────────────────────────
+// Google Sheets Lookup
+// ──────────────────────────────────────────────
+async function lookupMember(
+  url: string,
+  query: { name?: string; id?: string },
+): Promise<{ name: string; memberId: string } | null> {
+  try {
+    const params = new URLSearchParams();
+    if (query.name) params.set("name", query.name);
+    if (query.id) params.set("id", query.id);
+    const res = await fetch(`${url}?${params.toString()}`, {
+      method: "GET",
+      mode: "cors",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.name && data.memberId) return data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ──────────────────────────────────────────────
 // Input styling helpers
 // ──────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -176,10 +209,19 @@ export default function App() {
   const [manualUpi, setManualUpi] = useState("");
   const [manualNote, setManualNote] = useState("");
 
+  // Lookup state
+  const [nameLookup, setNameLookup] = useState<LookupState>("idle");
+  const [idLookup, setIdLookup] = useState<LookupState>("idle");
+  const nameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Settings
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [webhookInput, setWebhookInput] = useState(
     () => localStorage.getItem("akpack_webhook_url") || "",
+  );
+  const [lookupUrlInput, setLookupUrlInput] = useState(
+    () => localStorage.getItem("akpack_lookup_url") || "",
   );
 
   // Check voice support
@@ -223,6 +265,48 @@ export default function App() {
 
     setStatus("saved");
     setTimeout(() => setStatus("ready"), 2000);
+  }, []);
+
+  // ── Lookup by Name ──
+  const handleNameChange = useCallback((value: string) => {
+    setManualName(value);
+    setNameLookup("idle");
+    if (nameDebounceRef.current) clearTimeout(nameDebounceRef.current);
+
+    const lookupUrl = localStorage.getItem("akpack_lookup_url");
+    if (!lookupUrl || value.trim().length < 2) return;
+
+    nameDebounceRef.current = setTimeout(async () => {
+      setNameLookup("loading");
+      const result = await lookupMember(lookupUrl, { name: value.trim() });
+      if (result) {
+        setManualMemberId(result.memberId);
+        setNameLookup("found");
+      } else {
+        setNameLookup("notfound");
+      }
+    }, 500);
+  }, []);
+
+  // ── Lookup by Member ID ──
+  const handleMemberIdChange = useCallback((value: string) => {
+    setManualMemberId(value);
+    setIdLookup("idle");
+    if (idDebounceRef.current) clearTimeout(idDebounceRef.current);
+
+    const lookupUrl = localStorage.getItem("akpack_lookup_url");
+    if (!lookupUrl || value.trim().length < 1) return;
+
+    idDebounceRef.current = setTimeout(async () => {
+      setIdLookup("loading");
+      const result = await lookupMember(lookupUrl, { id: value.trim() });
+      if (result) {
+        setManualName(result.name);
+        setIdLookup("found");
+      } else {
+        setIdLookup("notfound");
+      }
+    }, 500);
   }, []);
 
   // Voice recognition
@@ -303,6 +387,8 @@ export default function App() {
     setManualCash("");
     setManualUpi("");
     setManualNote("");
+    setNameLookup("idle");
+    setIdLookup("idle");
   }, [
     manualName,
     manualMemberId,
@@ -330,6 +416,59 @@ export default function App() {
     (Number.parseFloat(manualCash) || 0) + (Number.parseFloat(manualUpi) || 0);
   const typeColor = getTypeColor(manualType);
 
+  const hasLookupUrl = !!localStorage.getItem("akpack_lookup_url");
+
+  // Helper: lookup badge
+  function LookupBadge({ state }: { state: LookupState }) {
+    if (state === "idle") return null;
+    if (state === "loading")
+      return (
+        <span
+          style={{
+            position: "absolute",
+            right: "10px",
+            top: "50%",
+            transform: "translateY(-50%)",
+          }}
+        >
+          <Loader2
+            size={12}
+            color="#555"
+            style={{ animation: "spin 1s linear infinite" }}
+          />
+        </span>
+      );
+    if (state === "found")
+      return (
+        <span
+          style={{
+            position: "absolute",
+            right: "10px",
+            top: "50%",
+            transform: "translateY(-50%)",
+          }}
+        >
+          <UserCheck size={12} color={COLOR_CASH} />
+        </span>
+      );
+    if (state === "notfound")
+      return (
+        <span
+          style={{
+            position: "absolute",
+            right: "10px",
+            top: "50%",
+            transform: "translateY(-50%)",
+            fontSize: "10px",
+            color: "#f87171",
+          }}
+        >
+          ?
+        </span>
+      );
+    return null;
+  }
+
   return (
     <div
       style={{
@@ -338,6 +477,11 @@ export default function App() {
         fontFamily: "'JetBrains Mono', monospace",
       }}
     >
+      <style>{`
+        @keyframes spin { from { transform: translateY(-50%) rotate(0deg); } to { transform: translateY(-50%) rotate(360deg); } }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .dot-pulse { animation: pulse 1.2s ease-in-out infinite; }
+      `}</style>
       <div
         style={{ maxWidth: "480px", margin: "0 auto", padding: "0 16px 80px" }}
       >
@@ -399,7 +543,6 @@ export default function App() {
                 type="button"
                 data-ocid="voice.primary_button"
                 onClick={toggleMic}
-                className={isListening ? "mic-listening" : ""}
                 style={{
                   width: "80px",
                   height: "80px",
@@ -483,19 +626,44 @@ export default function App() {
             marginBottom: "16px",
           }}
         >
-          <h2
+          <div
             style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: "10px",
-              fontWeight: 600,
-              letterSpacing: "0.15em",
-              color: "#555",
-              textTransform: "uppercase",
-              margin: "0 0 16px 0",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "16px",
             }}
           >
-            Manual Entry
-          </h2>
+            <h2
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: "10px",
+                fontWeight: 600,
+                letterSpacing: "0.15em",
+                color: "#555",
+                textTransform: "uppercase",
+                margin: 0,
+              }}
+            >
+              Manual Entry
+            </h2>
+            {hasLookupUrl && (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "9px",
+                  color: COLOR_CASH,
+                  letterSpacing: "0.08em",
+                  opacity: 0.7,
+                }}
+              >
+                <UserCheck size={10} />
+                Sheet Lookup Active
+              </span>
+            )}
+          </div>
 
           {/* Name + ID */}
           <div
@@ -510,42 +678,59 @@ export default function App() {
               <label htmlFor="manual-name" style={labelStyle}>
                 Name
               </label>
-              <input
-                id="manual-name"
-                data-ocid="manual.input"
-                type="text"
-                placeholder="Member name"
-                value={manualName}
-                onChange={(e) => setManualName(e.target.value)}
-                style={inputStyle}
-              />
+              <div style={{ position: "relative" }}>
+                <input
+                  id="manual-name"
+                  data-ocid="manual.input"
+                  type="text"
+                  placeholder="Member name"
+                  value={manualName}
+                  onChange={(e) => handleNameChange(e.target.value)}
+                  style={{
+                    ...inputStyle,
+                    paddingRight: nameLookup !== "idle" ? "30px" : "12px",
+                    borderColor:
+                      nameLookup === "found"
+                        ? `${COLOR_CASH}55`
+                        : nameLookup === "notfound"
+                          ? "#f8717144"
+                          : "#222",
+                  }}
+                />
+                <LookupBadge state={nameLookup} />
+              </div>
             </div>
             <div>
               <label htmlFor="manual-member-id" style={labelStyle}>
                 Member ID
               </label>
-              <input
-                id="manual-member-id"
-                data-ocid="manual.input"
-                type="number"
-                placeholder="ID"
-                value={manualMemberId}
-                onChange={(e) => setManualMemberId(e.target.value)}
-                style={inputStyle}
-              />
+              <div style={{ position: "relative" }}>
+                <input
+                  id="manual-member-id"
+                  data-ocid="manual.input"
+                  type="number"
+                  placeholder="ID"
+                  value={manualMemberId}
+                  onChange={(e) => handleMemberIdChange(e.target.value)}
+                  style={{
+                    ...inputStyle,
+                    paddingRight: idLookup !== "idle" ? "30px" : "12px",
+                    borderColor:
+                      idLookup === "found"
+                        ? `${COLOR_CASH}55`
+                        : idLookup === "notfound"
+                          ? "#f8717144"
+                          : "#222",
+                  }}
+                />
+                <LookupBadge state={idLookup} />
+              </div>
             </div>
           </div>
 
           {/* Type Toggle */}
           <div style={{ marginBottom: "10px" }}>
-            <p
-              style={{
-                ...labelStyle,
-                marginBottom: "6px",
-              }}
-            >
-              Type
-            </p>
+            <p style={{ ...labelStyle, marginBottom: "6px" }}>Type</p>
             <div
               style={{
                 display: "grid",
@@ -793,7 +978,6 @@ export default function App() {
                       padding: "14px 14px 12px",
                     }}
                   >
-                    {/* Row 1: Name + ID + Time */}
                     <div
                       style={{
                         display: "flex",
@@ -846,7 +1030,6 @@ export default function App() {
                       </span>
                     </div>
 
-                    {/* Row 2: Amount */}
                     <div style={{ marginBottom: "6px" }}>
                       {entry.type === "cash" && (
                         <span
@@ -904,7 +1087,6 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* Row 3: Badge + Note */}
                     <div
                       style={{
                         display: "flex",
@@ -990,11 +1172,12 @@ export default function App() {
               data-ocid="settings.panel"
               style={{ borderTop: "1px solid #1e1e1e", padding: "16px" }}
             >
+              {/* Webhook URL */}
               <label
                 htmlFor="webhook-url"
                 style={{ ...labelStyle, marginBottom: "6px" }}
               >
-                Google Apps Script URL
+                Google Apps Script — Save URL (Webhook)
               </label>
               <input
                 id="webhook-url"
@@ -1009,11 +1192,50 @@ export default function App() {
                   fontSize: "12px",
                 }}
               />
+
+              {/* Lookup URL */}
+              <label
+                htmlFor="lookup-url"
+                style={{
+                  ...labelStyle,
+                  marginBottom: "6px",
+                  color: `${COLOR_CASH}99`,
+                }}
+              >
+                Google Apps Script — Member Lookup URL
+              </label>
+              <p
+                style={{
+                  fontSize: "10px",
+                  color: "#444",
+                  margin: "0 0 6px",
+                  lineHeight: 1.5,
+                }}
+              >
+                A separate script that returns member details by name or ID for
+                auto-fill.
+              </p>
+              <input
+                id="lookup-url"
+                data-ocid="settings.lookup.input"
+                type="url"
+                placeholder="https://script.google.com/macros/s/..."
+                value={lookupUrlInput}
+                onChange={(e) => setLookupUrlInput(e.target.value)}
+                style={{
+                  ...inputStyle,
+                  marginBottom: "10px",
+                  fontSize: "12px",
+                  borderColor: lookupUrlInput ? `${COLOR_CASH}33` : "#222",
+                }}
+              />
+
               <button
                 type="button"
                 data-ocid="settings.save_button"
                 onClick={() => {
                   localStorage.setItem("akpack_webhook_url", webhookInput);
+                  localStorage.setItem("akpack_lookup_url", lookupUrlInput);
                   setStatus("saved");
                   setTimeout(() => setStatus("ready"), 1500);
                 }}
@@ -1031,8 +1253,80 @@ export default function App() {
                   cursor: "pointer",
                 }}
               >
-                Save URL
+                Save Settings
               </button>
+
+              {/* Apps Script instructions */}
+              <div
+                style={{
+                  marginTop: "16px",
+                  borderTop: "1px solid #1a1a1a",
+                  paddingTop: "14px",
+                }}
+              >
+                <p
+                  style={{
+                    fontSize: "9px",
+                    color: "#444",
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
+                    marginBottom: "8px",
+                  }}
+                >
+                  Apps Script — Member Lookup Code
+                </p>
+                <pre
+                  style={{
+                    backgroundColor: "#0a0a0a",
+                    border: "1px solid #1a1a1a",
+                    borderRadius: "6px",
+                    padding: "12px",
+                    fontSize: "10px",
+                    color: "#666",
+                    overflow: "auto",
+                    lineHeight: 1.6,
+                    margin: 0,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                  }}
+                >{`function doGet(e) {
+  var sheet = SpreadsheetApp
+    .getActiveSpreadsheet()
+    .getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  // Row 1 = headers: [MemberID, Name, ...]
+  var name = (e.parameter.name||"").toLowerCase();
+  var id   = e.parameter.id || "";
+  for (var i = 1; i < data.length; i++) {
+    var rowId   = String(data[i][0]);
+    var rowName = String(data[i][1]);
+    if (id && rowId === id) {
+      return respond({ memberId: rowId, name: rowName });
+    }
+    if (name && rowName.toLowerCase() === name) {
+      return respond({ memberId: rowId, name: rowName });
+    }
+  }
+  return respond(null);
+}
+function respond(data) {
+  var out = data ? JSON.stringify(data) : "null";
+  return ContentService
+    .createTextOutput(out)
+    .setMimeType(ContentService.MimeType.JSON);
+}`}</pre>
+                <p
+                  style={{
+                    fontSize: "9px",
+                    color: "#333",
+                    marginTop: "8px",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Deploy as Web App → Execute as: Me → Who has access: Anyone.
+                  Sheet columns: A=MemberID, B=Name.
+                </p>
+              </div>
             </div>
           )}
         </section>
