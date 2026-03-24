@@ -3,14 +3,10 @@ import {
   ChevronUp,
   Home,
   LayoutList,
-  Loader2,
   Lock,
-  Mic,
-  MicOff,
   Pencil,
   Plus,
   Settings,
-  UserCheck,
   Wallet,
   X,
 } from "lucide-react";
@@ -30,8 +26,6 @@ interface Entry {
   time: string;
 }
 
-type StatusState = "ready" | "listening" | "processing" | "saved" | "error";
-type LookupState = "idle" | "loading" | "found" | "notfound";
 type ActivePage = "home" | "collection" | "advance";
 
 // ──────────────────────────────────────────────
@@ -41,7 +35,7 @@ const COLOR_CASH = "#00ff88";
 const COLOR_UPI = "#a78bfa";
 const COLOR_BOTH = "#fbbf24";
 const APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbzYj1ZiuGuXG6d4ZSJGYxFlXGfHfNPoTViNT6QkNMMK4PvyhAKdSk4SUQDmqTZZmxr9Rg/exec";
+  "https://script.google.com/macros/s/AKfycbyyE1ZlzDGVpTAA35_0K3Onlg1y1PpmU4pZl74Qf1PuVfbvYZ-Ux6eQCfIzvyPDQgNi/exec";
 
 function getTypeColor(type: "cash" | "upi" | "both"): string {
   if (type === "cash") return COLOR_CASH;
@@ -69,102 +63,17 @@ function formatTime(): string {
   });
 }
 
-// ──────────────────────────────────────────────
-// Voice Parsing
-// ──────────────────────────────────────────────
-function parseTranscript(
-  transcript: string,
-): Omit<Entry, "id" | "time"> | null {
-  const tokens = transcript.trim().split(/\s+/);
-  if (tokens.length < 1 || !tokens[0]) return null;
-
-  const name =
-    tokens[0].charAt(0).toUpperCase() + tokens[0].slice(1).toLowerCase();
-  let memberId = "";
-  let idx = 1;
-
-  if (idx < tokens.length && /^\d+$/.test(tokens[idx])) {
-    memberId = tokens[idx];
-    idx++;
-  }
-
-  let cashAmount = 0;
-  let upiAmount = 0;
-  const noteWords: string[] = [];
-  let currentContext: "cash" | "upi" | "none" = "none";
-
-  const keywords = new Set(["cash", "upi", "both"]);
-
-  while (idx < tokens.length) {
-    const token = tokens[idx].toLowerCase();
-    if (token === "cash") {
-      currentContext = "cash";
-    } else if (token === "upi") {
-      currentContext = "upi";
-    } else if (token === "both") {
-      // hint, handled below
-    } else if (/^\d+$/.test(token)) {
-      const num = Number.parseInt(token, 10);
-      if (currentContext === "cash") {
-        cashAmount = num;
-        currentContext = "none";
-      } else if (currentContext === "upi") {
-        upiAmount = num;
-        currentContext = "none";
-      } else {
-        noteWords.push(tokens[idx]);
-      }
-    } else if (!keywords.has(token)) {
-      noteWords.push(tokens[idx]);
-    }
-    idx++;
-  }
-
-  let type: "cash" | "upi" | "both";
-  if (cashAmount > 0 && upiAmount > 0) {
-    type = "both";
-  } else if (cashAmount > 0) {
-    type = "cash";
-  } else if (upiAmount > 0) {
-    type = "upi";
-  } else {
-    type = "cash";
-  }
-
-  return {
-    name,
-    memberId,
-    type,
-    cash: cashAmount,
-    upi: upiAmount,
-    note: noteWords.join(" "),
-  };
-}
-
-// ──────────────────────────────────────────────
-// Google Sheets Lookup
-// ──────────────────────────────────────────────
-async function lookupMember(
-  url: string,
-  query: { name?: string; id?: string },
-): Promise<{ name: string; memberId: string } | null> {
-  try {
-    const params = new URLSearchParams();
-    params.set("action", "lookup");
-    params.set("sheet", "Members");
-    if (query.name) params.set("name", query.name);
-    if (query.id) params.set("id", query.id);
-    const res = await fetch(`${url}?${params.toString()}`, {
-      method: "GET",
-      mode: "cors",
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data?.name && data.memberId) return data;
-    return null;
-  } catch {
-    return null;
-  }
+function getISTDateTime(): { date: string; time: string } {
+  const now = new Date();
+  const istMs = now.getTime() + 5.5 * 60 * 60 * 1000;
+  const ist = new Date(istMs);
+  const dd = String(ist.getUTCDate()).padStart(2, "0");
+  const mm = String(ist.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = ist.getUTCFullYear();
+  const hh = String(ist.getUTCHours()).padStart(2, "0");
+  const mi = String(ist.getUTCMinutes()).padStart(2, "0");
+  const ss = String(ist.getUTCSeconds()).padStart(2, "0");
+  return { date: `${dd}-${mm}-${yyyy}`, time: `${hh}:${mi}:${ss} IST` };
 }
 
 // ──────────────────────────────────────────────
@@ -1178,6 +1087,7 @@ function AdvancePaymentPage({
         body: JSON.stringify({
           action: "save",
           sheet: "Advance Payments",
+          trainer: trainerName,
           trainerName,
           period: getPeriodLabel(newRecord.periodKey),
           amount: newRecord.amount,
@@ -1188,6 +1098,8 @@ function AdvancePaymentPage({
           commission: newRecord.commission,
           status: "open",
           entryId: newRecord.id,
+          savedDate: getISTDateTime().date,
+          savedTime: getISTDateTime().time,
           timestamp: new Date().toISOString(),
         }),
       }).catch(() => {});
@@ -2245,13 +2157,6 @@ export default function App() {
     }
   });
 
-  // Voice
-  const [status, setStatus] = useState<StatusState>("ready");
-  const [transcript, setTranscript] = useState("");
-  const [isListening, setIsListening] = useState(false);
-  const [voiceSupported, setVoiceSupported] = useState(true);
-  const recognitionRef = useRef<any>(null);
-
   // Manual form
   const [manualName, setManualName] = useState("");
   const [manualMemberId, setManualMemberId] = useState("");
@@ -2260,34 +2165,16 @@ export default function App() {
   const [manualUpi, setManualUpi] = useState("");
   const [manualNote, setManualNote] = useState("");
 
-  // Lookup state
-  const [nameLookup, setNameLookup] = useState<LookupState>("idle");
-  const [idLookup, setIdLookup] = useState<LookupState>("idle");
-  const nameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const idDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // Settings
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [webhookInput, setWebhookInput] = useState(
     () => localStorage.getItem("akpack_webhook_url") || APPS_SCRIPT_URL,
   );
-
   // Auto-initialize Apps Script URL on first load
   useEffect(() => {
     if (!localStorage.getItem("akpack_webhook_url")) {
       localStorage.setItem("akpack_webhook_url", APPS_SCRIPT_URL);
     }
-    if (!localStorage.getItem("akpack_lookup_url")) {
-      localStorage.setItem("akpack_lookup_url", APPS_SCRIPT_URL);
-    }
-  }, []);
-
-  // Check voice support
-  useEffect(() => {
-    const SR =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-    if (!SR) setVoiceSupported(false);
   }, []);
 
   // Persist entries
@@ -2369,120 +2256,7 @@ export default function App() {
         }),
       }).catch(() => {});
     }
-
-    setStatus("saved");
-    setTimeout(() => setStatus("ready"), 2000);
   }, []);
-
-  // ── Lookup by Name ──
-  const handleNameChange = useCallback((value: string) => {
-    setManualName(value);
-    setNameLookup("idle");
-    if (nameDebounceRef.current) clearTimeout(nameDebounceRef.current);
-
-    const lookupUrl = localStorage.getItem("akpack_lookup_url");
-    if (!lookupUrl || value.trim().length < 2) return;
-
-    nameDebounceRef.current = setTimeout(async () => {
-      setNameLookup("loading");
-      const result = await lookupMember(lookupUrl, { name: value.trim() });
-      if (result) {
-        setManualMemberId(result.memberId);
-        setNameLookup("found");
-      } else {
-        setNameLookup("notfound");
-      }
-    }, 500);
-  }, []);
-
-  // ── Lookup by Member ID ──
-  const handleMemberIdChange = useCallback((value: string) => {
-    setManualMemberId(value);
-    setIdLookup("idle");
-    if (idDebounceRef.current) clearTimeout(idDebounceRef.current);
-
-    const lookupUrl = localStorage.getItem("akpack_lookup_url");
-    if (!lookupUrl || value.trim().length < 1) return;
-
-    idDebounceRef.current = setTimeout(async () => {
-      setIdLookup("loading");
-      const result = await lookupMember(lookupUrl, { id: value.trim() });
-      if (result) {
-        setManualName(result.name);
-        setIdLookup("found");
-      } else {
-        setIdLookup("notfound");
-      }
-    }, 500);
-  }, []);
-
-  // Voice recognition
-  const startListening = useCallback(() => {
-    const SR =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-    if (!SR) return;
-
-    const recognition: any = new SR();
-    recognition.lang = "en-IN";
-    recognition.continuous = false;
-    recognition.interimResults = true;
-
-    recognition.onstart = () => {
-      setIsListening(true);
-      setStatus("listening");
-      setTranscript("");
-    };
-
-    let resultHandled = false;
-
-    recognition.onresult = (e: any) => {
-      const result = Array.from(e.results)
-        .map((r: any) => r[0].transcript)
-        .join(" ");
-      setTranscript(result);
-
-      if (e.results[e.results.length - 1].isFinal) {
-        resultHandled = true;
-        setStatus("processing");
-        const parsed = parseTranscript(result);
-        if (parsed?.name) {
-          saveEntry(parsed);
-          setTranscript("");
-        } else {
-          setStatus("error");
-          setTimeout(() => setStatus("ready"), 2000);
-        }
-      }
-    };
-
-    recognition.onerror = (e: any) => {
-      setIsListening(false);
-      // Don't show error if we already successfully saved an entry
-      if (resultHandled) return;
-      // Also ignore "no-speech" after recording ends naturally
-      if (e.error === "no-speech" || e.error === "aborted") return;
-      setStatus("error");
-      setTimeout(() => setStatus("ready"), 2000);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-  }, [saveEntry]);
-
-  const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    setIsListening(false);
-  }, []);
-
-  const toggleMic = useCallback(() => {
-    if (isListening) stopListening();
-    else startListening();
-  }, [isListening, startListening, stopListening]);
 
   // Manual save
   const handleManualSave = useCallback(() => {
@@ -2501,8 +2275,6 @@ export default function App() {
     setManualCash("");
     setManualUpi("");
     setManualNote("");
-    setNameLookup("idle");
-    setIdLookup("idle");
   }, [
     manualName,
     manualMemberId,
@@ -2513,75 +2285,9 @@ export default function App() {
     saveEntry,
   ]);
 
-  // Status display
-  const statusConfig: Record<
-    StatusState,
-    { label: string; color: string; dot?: boolean }
-  > = {
-    ready: { label: "Ready", color: "#555" },
-    listening: { label: "Listening...", color: COLOR_CASH, dot: true },
-    processing: { label: "Processing...", color: "#fbbf24", dot: true },
-    saved: { label: "Saved ✓", color: COLOR_CASH },
-    error: { label: "Error", color: "#f87171" },
-  };
-
-  const currentStatus = statusConfig[status];
   const manualTotal =
     (Number.parseFloat(manualCash) || 0) + (Number.parseFloat(manualUpi) || 0);
   const typeColor = getTypeColor(manualType);
-
-  const hasLookupUrl = !!localStorage.getItem("akpack_lookup_url");
-
-  // Helper: lookup badge
-  function LookupBadge({ state }: { state: LookupState }) {
-    if (state === "idle") return null;
-    if (state === "loading")
-      return (
-        <span
-          style={{
-            position: "absolute",
-            right: "10px",
-            top: "50%",
-            transform: "translateY(-50%)",
-          }}
-        >
-          <Loader2
-            size={12}
-            color="#555"
-            style={{ animation: "spin 1s linear infinite" }}
-          />
-        </span>
-      );
-    if (state === "found")
-      return (
-        <span
-          style={{
-            position: "absolute",
-            right: "10px",
-            top: "50%",
-            transform: "translateY(-50%)",
-          }}
-        >
-          <UserCheck size={12} color={COLOR_CASH} />
-        </span>
-      );
-    if (state === "notfound")
-      return (
-        <span
-          style={{
-            position: "absolute",
-            right: "10px",
-            top: "50%",
-            transform: "translateY(-50%)",
-            fontSize: "10px",
-            color: "#f87171",
-          }}
-        >
-          ?
-        </span>
-      );
-    return null;
-  }
 
   return (
     <div
@@ -2745,102 +2451,6 @@ export default function App() {
         {/* ── Pages ── */}
         {activePage === "home" ? (
           <>
-            {/* ── Voice Section ── */}
-            <section
-              style={{
-                backgroundColor: "#111",
-                border: "1px solid #222",
-                borderRadius: "12px",
-                padding: "28px 20px 20px",
-                marginBottom: "16px",
-                textAlign: "center",
-              }}
-            >
-              {!voiceSupported ? (
-                <p style={{ color: "#f87171", fontSize: "13px", margin: 0 }}>
-                  Voice not supported on this browser
-                </p>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    data-ocid="voice.primary_button"
-                    onClick={toggleMic}
-                    style={{
-                      width: "80px",
-                      height: "80px",
-                      borderRadius: "50%",
-                      backgroundColor: isListening ? "#0a2a1a" : "#141414",
-                      border: isListening
-                        ? `2px solid ${COLOR_CASH}`
-                        : "2px solid #333",
-                      cursor: "pointer",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      transition: "all 0.2s ease",
-                      marginBottom: "16px",
-                    }}
-                    aria-label={
-                      isListening ? "Stop recording" : "Start recording"
-                    }
-                  >
-                    {isListening ? (
-                      <MicOff size={28} color={COLOR_CASH} />
-                    ) : (
-                      <Mic size={28} color="#888" />
-                    )}
-                  </button>
-
-                  <div
-                    style={{
-                      minHeight: "40px",
-                      backgroundColor: "#0a0a0a",
-                      border: "1px solid #1a1a1a",
-                      borderRadius: "8px",
-                      padding: "10px 12px",
-                      fontSize: "13px",
-                      color: transcript ? "#ddd" : "#444",
-                      fontStyle: transcript ? "normal" : "italic",
-                      marginBottom: "14px",
-                      textAlign: "left",
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    {transcript || "Tap mic and speak..."}
-                  </div>
-
-                  <div
-                    data-ocid="voice.loading_state"
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      fontSize: "11px",
-                      color: currentStatus.color,
-                      fontFamily: "'JetBrains Mono', monospace",
-                      letterSpacing: "0.05em",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    {currentStatus.dot && (
-                      <span
-                        className="dot-pulse"
-                        style={{
-                          width: "6px",
-                          height: "6px",
-                          borderRadius: "50%",
-                          backgroundColor: currentStatus.color,
-                          display: "inline-block",
-                        }}
-                      />
-                    )}
-                    {currentStatus.label}
-                  </div>
-                </>
-              )}
-            </section>
-
             {/* ── Manual Entry Form ── */}
             <section
               style={{
@@ -2872,22 +2482,6 @@ export default function App() {
                 >
                   Manual Entry
                 </h2>
-                {hasLookupUrl && (
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "4px",
-                      fontSize: "9px",
-                      color: COLOR_CASH,
-                      letterSpacing: "0.08em",
-                      opacity: 0.7,
-                    }}
-                  >
-                    <UserCheck size={10} />
-                    Sheet Lookup Active
-                  </span>
-                )}
               </div>
 
               {/* Name + ID */}
@@ -2903,53 +2497,29 @@ export default function App() {
                   <label htmlFor="manual-name" style={labelStyle}>
                     Name
                   </label>
-                  <div style={{ position: "relative" }}>
-                    <input
-                      id="manual-name"
-                      data-ocid="manual.input"
-                      type="text"
-                      placeholder="Member name"
-                      value={manualName}
-                      onChange={(e) => handleNameChange(e.target.value)}
-                      style={{
-                        ...inputStyle,
-                        paddingRight: nameLookup !== "idle" ? "30px" : "12px",
-                        borderColor:
-                          nameLookup === "found"
-                            ? `${COLOR_CASH}55`
-                            : nameLookup === "notfound"
-                              ? "#f8717144"
-                              : "#222",
-                      }}
-                    />
-                    <LookupBadge state={nameLookup} />
-                  </div>
+                  <input
+                    id="manual-name"
+                    data-ocid="manual.input"
+                    type="text"
+                    placeholder="Member name"
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value)}
+                    style={{ ...inputStyle }}
+                  />
                 </div>
                 <div>
                   <label htmlFor="manual-member-id" style={labelStyle}>
                     Member ID
                   </label>
-                  <div style={{ position: "relative" }}>
-                    <input
-                      id="manual-member-id"
-                      data-ocid="manual.input"
-                      type="number"
-                      placeholder="ID"
-                      value={manualMemberId}
-                      onChange={(e) => handleMemberIdChange(e.target.value)}
-                      style={{
-                        ...inputStyle,
-                        paddingRight: idLookup !== "idle" ? "30px" : "12px",
-                        borderColor:
-                          idLookup === "found"
-                            ? `${COLOR_CASH}55`
-                            : idLookup === "notfound"
-                              ? "#f8717144"
-                              : "#222",
-                      }}
-                    />
-                    <LookupBadge state={idLookup} />
-                  </div>
+                  <input
+                    id="manual-member-id"
+                    data-ocid="manual.input"
+                    type="number"
+                    placeholder="ID"
+                    value={manualMemberId}
+                    onChange={(e) => setManualMemberId(e.target.value)}
+                    style={{ ...inputStyle }}
+                  />
                 </div>
               </div>
 
@@ -3292,9 +2862,6 @@ export default function App() {
                     data-ocid="settings.save_button"
                     onClick={() => {
                       localStorage.setItem("akpack_webhook_url", webhookInput);
-                      localStorage.setItem("akpack_lookup_url", webhookInput);
-                      setStatus("saved");
-                      setTimeout(() => setStatus("ready"), 1500);
                     }}
                     style={{
                       padding: "8px 16px",
@@ -3366,6 +2933,19 @@ export default function App() {
   return respond(null);
 }
 
+function getISTDateTime() {
+  var now = new Date();
+  var istMs = now.getTime() + (5.5 * 60 * 60 * 1000);
+  var ist = new Date(istMs);
+  var dd = String(ist.getUTCDate()).padStart(2,"0");
+  var mm = String(ist.getUTCMonth()+1).padStart(2,"0");
+  var yyyy = ist.getUTCFullYear();
+  var hh = String(ist.getUTCHours()).padStart(2,"0");
+  var mi = String(ist.getUTCMinutes()).padStart(2,"0");
+  var ss2 = String(ist.getUTCSeconds()).padStart(2,"0");
+  return { date: dd+"-"+mm+"-"+yyyy, time: hh+":"+mi+":"+ss2+" IST" };
+}
+
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
@@ -3413,7 +2993,7 @@ function doPost(e) {
       ]);
     } else if (sheetName === "Advance Payments") {
       if (sheet.getLastRow() === 0) {
-        sheet.appendRow(["Trainer Name","Period","Amount","Date","By Hand","UPI","Notes","Commission","Status","Timestamp","Entry ID"]);
+        sheet.appendRow(["Trainer Name","Period","Amount","Date","By Hand","UPI","Notes","Commission","Status","Saved Date","Saved Time","Entry ID"]);
       }
       // If action is "update", find and update matching row
       if (data.action === "update" && data.entryId) {
@@ -3424,21 +3004,22 @@ function doPost(e) {
           for (var ar = 1; ar < apRows.length; ar++) {
             if (String(apRows[ar][apIdCol]) === String(data.entryId)) {
               var apRowNum = ar + 1;
-              sheet.getRange(apRowNum, apHeaders.indexOf("Trainer Name")+1).setValue(data.trainerName || "");
+              sheet.getRange(apRowNum, apHeaders.indexOf("Trainer Name")+1).setValue(data.trainerName || data.trainer || "");
               sheet.getRange(apRowNum, apHeaders.indexOf("Amount")+1).setValue(data.amount || 0);
               sheet.getRange(apRowNum, apHeaders.indexOf("Date")+1).setValue(data.date || "");
               sheet.getRange(apRowNum, apHeaders.indexOf("By Hand")+1).setValue(data.byHand || 0);
               sheet.getRange(apRowNum, apHeaders.indexOf("UPI")+1).setValue(data.upi || 0);
               sheet.getRange(apRowNum, apHeaders.indexOf("Notes")+1).setValue(data.notes || "");
               sheet.getRange(apRowNum, apHeaders.indexOf("Commission")+1).setValue(data.commission || 0);
-              sheet.getRange(apRowNum, apHeaders.indexOf("Timestamp")+1).setValue(new Date().toISOString());
+              var istNow = getISTDateTime(); sheet.getRange(apRowNum, apHeaders.indexOf("Saved Date")+1).setValue(istNow.date); sheet.getRange(apRowNum, apHeaders.indexOf("Saved Time")+1).setValue(istNow.time);
               return respond({ status: "ok", updated: true });
             }
           }
         }
       }
+      var istTs = getISTDateTime();
       sheet.appendRow([
-        data.trainerName || "",
+        data.trainer || data.trainerName || "",
         data.period || "",
         data.amount || 0,
         data.date || "",
@@ -3447,7 +3028,8 @@ function doPost(e) {
         data.notes || "",
         data.commission || 0,
         data.status || "open",
-        data.timestamp || new Date().toISOString(),
+        data.savedDate || istTs.date,
+        data.savedTime || istTs.time,
         data.entryId || ""
       ]);
     }
