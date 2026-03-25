@@ -1,3 +1,4 @@
+import { useAuth0 } from "@auth0/auth0-react";
 import {
   ChevronDown,
   ChevronUp,
@@ -2544,6 +2545,7 @@ function AdvancePaymentPage({
 // Main App
 // ──────────────────────────────────────────────
 export default function App() {
+  const { user, logout } = useAuth0();
   // Active page
   const [activePage, setActivePage] = useState<ActivePage>("home");
 
@@ -2811,6 +2813,66 @@ export default function App() {
             >
               {formatDate()}
             </div>
+            {/* User info + logout */}
+            {user && (
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "6px" }}
+              >
+                <div
+                  style={{
+                    width: "28px",
+                    height: "28px",
+                    borderRadius: "50%",
+                    backgroundColor: "#1a1a1a",
+                    border: "1px solid #2a2a2a",
+                    overflow: "hidden",
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "12px",
+                    color: "#00ff88",
+                    fontWeight: 700,
+                  }}
+                >
+                  {user.picture ? (
+                    <img
+                      src={user.picture}
+                      alt={user.name || "User"}
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
+                    />
+                  ) : (
+                    (user.name || user.email || "?")[0].toUpperCase()
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    logout({
+                      logoutParams: { returnTo: window.location.origin },
+                    })
+                  }
+                  title={`Logged in as ${user.name || user.email}`}
+                  style={{
+                    backgroundColor: "#141414",
+                    border: "1px solid #222",
+                    borderRadius: "20px",
+                    padding: "5px 10px",
+                    fontSize: "10px",
+                    color: "#666",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Logout
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
