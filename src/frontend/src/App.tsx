@@ -36,7 +36,7 @@ const COLOR_CASH = "#00ff88";
 const COLOR_UPI = "#a78bfa";
 const COLOR_BOTH = "#fbbf24";
 const APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbyyE1ZlzDGVpTAA35_0K3Onlg1y1PpmU4pZl74Qf1PuVfbvYZ-Ux6eQCfIzvyPDQgNi/exec";
+  "https://script.google.com/macros/s/AKfycbzRSv8jYX6Wqu6s0VhzK51Xa6uquLw678ee9CIYqsGCQ5gJNBCSnUM9UXyAwPVHtIbP/exec";
 
 function getTypeColor(type: "cash" | "upi" | "both"): string {
   if (type === "cash") return COLOR_CASH;
