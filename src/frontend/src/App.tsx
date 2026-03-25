@@ -149,6 +149,47 @@ async function fetchAdvanceRecordsFromSheet(
   }
 }
 
+async function fetchConfigFromSheet(
+  scriptUrl: string,
+): Promise<{ adminPin?: string } | null> {
+  if (!scriptUrl) return null;
+  try {
+    const res = await fetch(`${scriptUrl}?action=getEntries&sheet=Config`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    const pinRow = data.find((row: any) => row.key === "adminPin");
+    if (pinRow) return { adminPin: String(pinRow.value) };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveConfigToSheet(
+  scriptUrl: string,
+  key: string,
+  value: string,
+): Promise<void> {
+  if (!scriptUrl) return;
+  try {
+    fetch(scriptUrl, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "save",
+        sheet: "Config",
+        key,
+        value,
+        entryId: `config_${key}`,
+      }),
+    }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
 // ──────────────────────────────────────────────
 // Input styling helpers
 // ──────────────────────────────────────────────
@@ -1246,6 +1287,7 @@ function AdvancePaymentPage({
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [pinSetError, setPinSetError] = useState("");
+  const [showPinModal, setShowPinModal] = useState(false);
 
   // Trainer management
   const [showAddTrainer, setShowAddTrainer] = useState(false);
@@ -1317,6 +1359,7 @@ function AdvancePaymentPage({
     }
     setAdminPin(newPin);
     localStorage.setItem("akpack_admin_pin", newPin);
+    saveConfigToSheet(scriptUrl, "adminPin", newPin);
     setPinUnlocked(true);
     setSettingPin(false);
   }
@@ -1415,201 +1458,218 @@ function AdvancePaymentPage({
   }
 
   function handleClosePeriod(key: string) {
-    const pin = prompt("Enter admin PIN to close this period:");
-    if (pin === adminPin) {
-      setClosedPeriods((prev) => [...prev, key]);
-    } else {
-      alert("Incorrect PIN.");
+    if (!pinUnlocked) {
+      alert("Enter admin mode first.");
+      return;
     }
+    setClosedPeriods((prev) => [...prev, key]);
   }
 
   const mono = "'JetBrains Mono', monospace";
   const syne = "'Syne', sans-serif";
 
-  // PIN Gate
-  if (!pinUnlocked) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          minHeight: "60vh",
-          padding: "20px",
-        }}
-      >
-        <div
-          style={{
-            backgroundColor: "#111",
-            border: "1px solid #222",
-            borderRadius: "14px",
-            padding: "32px 24px",
-            width: "100%",
-            maxWidth: "320px",
-          }}
-        >
-          {settingPin ? (
-            <>
-              <div
-                style={{
-                  fontFamily: syne,
-                  fontSize: "18px",
-                  fontWeight: 800,
-                  color: "#fff",
-                  marginBottom: "6px",
-                }}
-              >
-                Set Admin PIN
-              </div>
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "#555",
-                  fontFamily: mono,
-                  marginBottom: "20px",
-                }}
-              >
-                Create a PIN to protect advance payment data
-              </div>
-              <label htmlFor="advance-new-pin" style={{ ...labelStyle }}>
-                New PIN
-              </label>
-              <input
-                id="advance-new-pin"
-                type="password"
-                maxLength={8}
-                value={newPin}
-                onChange={(e) => setNewPin(e.target.value)}
-                style={{ ...inputStyle, marginBottom: "12px" }}
-                placeholder="Min 4 digits"
-                data-ocid="advance.pin.input"
-              />
-              <label htmlFor="advance-confirm-pin" style={{ ...labelStyle }}>
-                Confirm PIN
-              </label>
-              <input
-                id="advance-confirm-pin"
-                type="password"
-                maxLength={8}
-                value={confirmPin}
-                onChange={(e) => setConfirmPin(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSetPin()}
-                style={{ ...inputStyle, marginBottom: "12px" }}
-                placeholder="Repeat PIN"
-              />
-              {pinSetError && (
-                <div
-                  style={{
-                    color: "#ff4444",
-                    fontSize: "11px",
-                    fontFamily: mono,
-                    marginBottom: "10px",
-                  }}
-                >
-                  {pinSetError}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={handleSetPin}
-                data-ocid="advance.pin.submit_button"
-                style={{
-                  width: "100%",
-                  backgroundColor: COLOR_CASH,
-                  color: "#000",
-                  border: "none",
-                  borderRadius: "8px",
-                  padding: "12px",
-                  fontFamily: mono,
-                  fontSize: "13px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                SET PIN & UNLOCK
-              </button>
-            </>
-          ) : (
-            <>
-              <div
-                style={{
-                  fontFamily: syne,
-                  fontSize: "18px",
-                  fontWeight: 800,
-                  color: "#fff",
-                  marginBottom: "6px",
-                }}
-              >
-                Admin PIN Required
-              </div>
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "#555",
-                  fontFamily: mono,
-                  marginBottom: "20px",
-                }}
-              >
-                Enter PIN to access advance payments
-              </div>
-              <label htmlFor="advance-pin" style={{ ...labelStyle }}>
-                PIN
-              </label>
-              <input
-                id="advance-pin"
-                type="password"
-                maxLength={8}
-                value={pinInput}
-                onChange={(e) => setPinInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleUnlock()}
-                style={{ ...inputStyle, marginBottom: "12px" }}
-                placeholder="Enter PIN"
-                data-ocid="advance.pin.input"
-              />
-              {pinError && (
-                <div
-                  style={{
-                    color: "#ff4444",
-                    fontSize: "11px",
-                    fontFamily: mono,
-                    marginBottom: "10px",
-                  }}
-                >
-                  {pinError}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={handleUnlock}
-                data-ocid="advance.pin.submit_button"
-                style={{
-                  width: "100%",
-                  backgroundColor: COLOR_CASH,
-                  color: "#000",
-                  border: "none",
-                  borderRadius: "8px",
-                  padding: "12px",
-                  fontFamily: mono,
-                  fontSize: "13px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                UNLOCK
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   // Main content
   return (
     <div>
+      {/* Admin PIN Modal */}
+      {showPinModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.8)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: "#111",
+              border: "1px solid #333",
+              borderRadius: "14px",
+              padding: "28px 24px",
+              width: "90%",
+              maxWidth: "300px",
+            }}
+          >
+            {settingPin ? (
+              <>
+                <div
+                  style={{
+                    fontFamily: syne,
+                    fontSize: "16px",
+                    fontWeight: 800,
+                    color: "#fff",
+                    marginBottom: "16px",
+                  }}
+                >
+                  Set Admin PIN
+                </div>
+                <input
+                  type="password"
+                  maxLength={8}
+                  value={newPin}
+                  onChange={(e) => setNewPin(e.target.value)}
+                  placeholder="New PIN (min 4 digits)"
+                  style={{ ...inputStyle, marginBottom: "8px" }}
+                  data-ocid="advance.new_pin.input"
+                />
+                <input
+                  type="password"
+                  maxLength={8}
+                  value={confirmPin}
+                  onChange={(e) => setConfirmPin(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSetPin()}
+                  placeholder="Confirm PIN"
+                  style={{ ...inputStyle, marginBottom: "8px" }}
+                  data-ocid="advance.confirm_pin.input"
+                />
+                {pinSetError && (
+                  <div
+                    style={{
+                      color: "#ff4444",
+                      fontSize: "11px",
+                      fontFamily: mono,
+                      marginBottom: "8px",
+                    }}
+                  >
+                    {pinSetError}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSetPin();
+                    if (pinUnlocked) setShowPinModal(false);
+                  }}
+                  data-ocid="advance.set_pin.submit_button"
+                  style={{
+                    width: "100%",
+                    backgroundColor: COLOR_CASH,
+                    color: "#000",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "12px",
+                    fontFamily: mono,
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  SET PIN
+                </button>
+              </>
+            ) : (
+              <>
+                <div
+                  style={{
+                    fontFamily: syne,
+                    fontSize: "16px",
+                    fontWeight: 800,
+                    color: "#fff",
+                    marginBottom: "16px",
+                  }}
+                >
+                  🔒 Admin Mode
+                </div>
+                <input
+                  id="advance-pin"
+                  type="password"
+                  maxLength={8}
+                  value={pinInput}
+                  onChange={(e) => setPinInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleUnlock();
+                      if (pinInput === adminPin) setShowPinModal(false);
+                    }
+                  }}
+                  placeholder="Enter PIN"
+                  style={{ ...inputStyle, marginBottom: "8px" }}
+                  data-ocid="advance.pin.input"
+                />
+                {pinError && (
+                  <div
+                    style={{
+                      color: "#ff4444",
+                      fontSize: "11px",
+                      fontFamily: mono,
+                      marginBottom: "8px",
+                    }}
+                  >
+                    {pinError}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleUnlock();
+                      if (pinInput === adminPin) setShowPinModal(false);
+                    }}
+                    data-ocid="advance.pin.submit_button"
+                    style={{
+                      flex: 1,
+                      backgroundColor: COLOR_CASH,
+                      color: "#000",
+                      border: "none",
+                      borderRadius: "8px",
+                      padding: "12px",
+                      fontFamily: mono,
+                      fontSize: "13px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    UNLOCK
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPinModal(false);
+                      setPinInput("");
+                      setPinError("");
+                    }}
+                    data-ocid="advance.pin.cancel_button"
+                    style={{
+                      backgroundColor: "#222",
+                      color: "#888",
+                      border: "1px solid #333",
+                      borderRadius: "8px",
+                      padding: "12px 16px",
+                      fontFamily: mono,
+                      fontSize: "13px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+                {!adminPin && (
+                  <button
+                    type="button"
+                    onClick={() => setSettingPin(true)}
+                    style={{
+                      marginTop: "10px",
+                      width: "100%",
+                      backgroundColor: "transparent",
+                      color: "#555",
+                      border: "none",
+                      fontFamily: mono,
+                      fontSize: "11px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    No PIN set yet? Set one
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
       {advFetchError && (
         <div
           style={{
@@ -1682,30 +1742,73 @@ function AdvancePaymentPage({
           >
             {isRefreshing ? "⟳ Syncing..." : "⟳ Refresh"}
           </button>
+          {pinUnlocked ? (
+            <button
+              type="button"
+              data-ocid="advance.admin_mode.toggle"
+              onClick={() => setPinUnlocked(false)}
+              style={{
+                backgroundColor: "#00ff8822",
+                border: "1px solid #00ff8855",
+                borderRadius: "6px",
+                color: "#00ff88",
+                fontFamily: mono,
+                fontSize: "10px",
+                fontWeight: 700,
+                padding: "6px 10px",
+                cursor: "pointer",
+                letterSpacing: "0.05em",
+              }}
+            >
+              🔓 ADMIN
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-ocid="advance.admin_mode.toggle"
+              onClick={() => setShowPinModal(true)}
+              style={{
+                backgroundColor: "#141414",
+                border: "1px solid #444",
+                borderRadius: "6px",
+                color: "#888",
+                fontFamily: mono,
+                fontSize: "10px",
+                fontWeight: 700,
+                padding: "6px 10px",
+                cursor: "pointer",
+                letterSpacing: "0.05em",
+              }}
+            >
+              🔒 ADMIN
+            </button>
+          )}
+          {pinUnlocked && (
+            <button
+              type="button"
+              data-ocid="advance.add_trainer.button"
+              onClick={() => setShowAddTrainer((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                backgroundColor: "transparent",
+                border: `1px solid ${COLOR_CASH}55`,
+                color: COLOR_CASH,
+                borderRadius: "8px",
+                padding: "8px 12px",
+                fontFamily: mono,
+                fontSize: "11px",
+                fontWeight: 700,
+                cursor: "pointer",
+                letterSpacing: "0.08em",
+              }}
+            >
+              <Plus size={12} />
+              ADD TRAINER
+            </button>
+          )}
         </div>
-        <button
-          type="button"
-          data-ocid="advance.add_trainer.button"
-          onClick={() => setShowAddTrainer((v) => !v)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "4px",
-            backgroundColor: "transparent",
-            border: `1px solid ${COLOR_CASH}55`,
-            color: COLOR_CASH,
-            borderRadius: "8px",
-            padding: "8px 12px",
-            fontFamily: mono,
-            fontSize: "11px",
-            fontWeight: 700,
-            cursor: "pointer",
-            letterSpacing: "0.08em",
-          }}
-        >
-          <Plus size={12} />
-          ADD TRAINER
-        </button>
       </div>
 
       {/* Add Trainer inline */}
@@ -2268,7 +2371,7 @@ function AdvancePaymentPage({
                         )}
 
                         {/* Entry Form */}
-                        {!isClosed && (
+                        {!isClosed && pinUnlocked && (
                           <div style={{ marginBottom: "16px" }}>
                             <div
                               style={{
@@ -2610,6 +2713,18 @@ export default function App() {
     if (!localStorage.getItem("akpack_webhook_url")) {
       localStorage.setItem("akpack_webhook_url", APPS_SCRIPT_URL);
     }
+  }, []);
+
+  // Sync admin PIN from Google Sheets on mount
+  useEffect(() => {
+    const url = localStorage.getItem("akpack_webhook_url") || APPS_SCRIPT_URL;
+    if (!url) return;
+    fetchConfigFromSheet(url).then((cfg) => {
+      if (cfg?.adminPin) {
+        setAdminPin(cfg.adminPin);
+        localStorage.setItem("akpack_admin_pin", cfg.adminPin);
+      }
+    });
   }, []);
 
   // Fetch today's entries from Google Sheets on mount

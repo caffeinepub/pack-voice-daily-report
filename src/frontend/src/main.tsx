@@ -18,15 +18,12 @@ declare global {
 
 const queryClient = new QueryClient();
 
-// Determine the redirect URI (works on Netlify, ICP, and local)
-const redirectUri = window.location.origin;
-
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <Auth0Provider
     domain={AUTH0_DOMAIN}
     clientId={AUTH0_CLIENT_ID}
     authorizationParams={{
-      redirect_uri: redirectUri,
+      redirect_uri: window.location.origin,
     }}
   >
     <QueryClientProvider client={queryClient}>
