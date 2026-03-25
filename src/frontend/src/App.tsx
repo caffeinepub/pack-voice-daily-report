@@ -76,6 +76,78 @@ function getISTDateTime(): { date: string; time: string } {
   return { date: `${dd}-${mm}-${yyyy}`, time: `${hh}:${mi}:${ss} IST` };
 }
 
+function formatDateDMY(dateStr: string): string {
+  if (!dateStr) return "";
+  const parts = dateStr.split("-");
+  if (parts.length === 3 && parts[0].length === 4) {
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+  return dateStr;
+}
+
+// ──────────────────────────────────────────────
+// Google Sheets fetch helpers
+// ──────────────────────────────────────────────
+async function fetchEntriesFromSheet(
+  date: string,
+  scriptUrl: string,
+): Promise<Entry[] | null> {
+  if (!scriptUrl) return null;
+  try {
+    const res = await fetch(
+      `${scriptUrl}?action=getEntries&sheet=Accounts&date=${date}`,
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    return data.map((row: any) => ({
+      id: String(row.id || Date.now() + Math.random()),
+      name: String(row.name || ""),
+      memberId: String(row.memberId || ""),
+      type: (["cash", "upi", "both"].includes(row.type) ? row.type : "cash") as
+        | "cash"
+        | "upi"
+        | "both",
+      cash: Number(row.cash) || 0,
+      upi: Number(row.upi) || 0,
+      note: String(row.note || ""),
+      time: String(row.time || ""),
+    }));
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAdvanceRecordsFromSheet(
+  scriptUrl: string,
+): Promise<AdvanceRecord[] | null> {
+  if (!scriptUrl) return null;
+  try {
+    const res = await fetch(
+      `${scriptUrl}?action=getEntries&sheet=Advance+Payments`,
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    return data.map((row: any) => ({
+      id: String(row.id || Date.now() + Math.random()),
+      trainerId: String(row.trainerId || row.trainer || ""),
+      periodKey: labelToPeriodKey(
+        String(row.period || ""),
+        String(row.date || ""),
+      ),
+      amount: Number(row.amount) || 0,
+      date: String(row.date || ""),
+      byHand: Number(row.byHand) || 0,
+      upi: Number(row.upi) || 0,
+      notes: String(row.notes || ""),
+      commission: Number(row.commission) || 0,
+    }));
+  } catch {
+    return null;
+  }
+}
+
 // ──────────────────────────────────────────────
 // Input styling helpers
 // ──────────────────────────────────────────────
@@ -562,12 +634,76 @@ function EditEntryModal({
 // Collection Page
 // ──────────────────────────────────────────────
 function CollectionPage({
-  entries,
+  todayEntries,
   onEdit,
-}: { entries: Entry[]; onEdit?: (entry: Entry) => void }) {
+  scriptUrl,
+}: {
+  todayEntries: Entry[];
+  onEdit?: (entry: Entry) => void;
+  scriptUrl: string;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const [entries, setEntries] = useState<Entry[]>(todayEntries);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasFetched, setHasFetched] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
+
+  const loadEntries = async (date: string) => {
+    if (!scriptUrl) {
+      if (date === todayStr) setEntries(todayEntries);
+      return;
+    }
+    setIsLoading(true);
+    setFetchError(false);
+    const fetched = await fetchEntriesFromSheet(date, scriptUrl);
+    if (fetched !== null) {
+      // Success - use cloud data (even if empty for this date)
+      setEntries(fetched);
+      setFetchError(false);
+    } else {
+      // Error - fall back to localStorage for today, show error
+      if (date === todayStr) setEntries(todayEntries);
+      else setEntries([]);
+      setFetchError(true);
+    }
+    setIsLoading(false);
+    setHasFetched(true);
+  };
+
+  // On mount, load entries from Sheets
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only
+  useEffect(() => {
+    loadEntries(selectedDate);
+  }, []);
+
+  // Sync todayEntries when a new entry is added on Home tab (today only)
+  useEffect(() => {
+    if (selectedDate === todayStr && hasFetched) {
+      setEntries(todayEntries);
+    }
+  }, [todayEntries, selectedDate, todayStr, hasFetched]);
+
+  const handleDateChange = (date: string) => {
+    setSelectedDate(date);
+    setHasFetched(false);
+    loadEntries(date);
+  };
+
+  const formatSelectedDate = (dateStr: string) => {
+    const d = new Date(`${dateStr}T00:00:00`);
+    return d.toLocaleDateString("en-IN", {
+      weekday: "long",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
   const cashTotal = entries.reduce((sum, e) => sum + e.cash, 0);
   const upiTotal = entries.reduce((sum, e) => sum + e.upi, 0);
   const grandTotal = cashTotal + upiTotal;
+  const isToday = selectedDate === todayStr;
 
   return (
     <div>
@@ -577,25 +713,78 @@ function CollectionPage({
           marginBottom: "20px",
         }}
       >
-        <h2
-          style={{
-            fontFamily: "'Syne', sans-serif",
-            fontSize: "22px",
-            fontWeight: 800,
-            color: "#fff",
-            margin: "0 0 4px",
-            letterSpacing: "-0.3px",
-          }}
-        >
-          Today's Collection
-        </h2>
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "8px",
+            justifyContent: "space-between",
+            marginBottom: "8px",
           }}
         >
+          <h2
+            style={{
+              fontFamily: "'Syne', sans-serif",
+              fontSize: "22px",
+              fontWeight: 800,
+              color: "#fff",
+              margin: 0,
+              letterSpacing: "-0.3px",
+            }}
+          >
+            {isToday ? "Today's Collection" : "Collection Report"}
+          </h2>
+          <button
+            type="button"
+            data-ocid="collection.button"
+            onClick={() => {
+              setHasFetched(false);
+              loadEntries(selectedDate);
+            }}
+            disabled={isLoading}
+            style={{
+              backgroundColor: "#141414",
+              border: "1px solid #222",
+              borderRadius: "6px",
+              color: isLoading ? "#444" : "#888",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: "10px",
+              padding: "6px 10px",
+              cursor: isLoading ? "default" : "pointer",
+              letterSpacing: "0.05em",
+            }}
+          >
+            {isLoading ? "⟳ Loading..." : "⟳ Refresh"}
+          </button>
+        </div>
+
+        {/* Date picker */}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            marginBottom: "8px",
+          }}
+        >
+          <input
+            type="date"
+            data-ocid="collection.input"
+            value={selectedDate}
+            max={todayStr}
+            onChange={(e) => handleDateChange(e.target.value)}
+            style={{
+              backgroundColor: "#141414",
+              border: "1px solid #222",
+              borderRadius: "6px",
+              color: "#f5f5f5",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: "12px",
+              padding: "7px 10px",
+              outline: "none",
+              colorScheme: "dark",
+              flexShrink: 0,
+            }}
+          />
           <span
             style={{
               fontSize: "11px",
@@ -603,8 +792,61 @@ function CollectionPage({
               fontFamily: "'JetBrains Mono', monospace",
             }}
           >
-            {formatDate()}
+            {formatSelectedDate(selectedDate)}
           </span>
+        </div>
+
+        {fetchError && (
+          <div
+            style={{
+              backgroundColor: "#fbbf24",
+              color: "#1a1a00",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: "11px",
+              fontWeight: "bold",
+              padding: "8px 10px",
+              borderRadius: "6px",
+              marginBottom: "8px",
+              lineHeight: "1.5",
+            }}
+          >
+            ⚠ Cloud sync not working. Go to Settings, copy the Apps Script code,
+            redeploy it in Google Apps Script (Deploy → New version → Anyone
+            access), then update the URL here.
+          </div>
+        )}
+        {!fetchError && hasFetched && !isLoading && (
+          <div
+            style={{
+              fontSize: "10px",
+              color: "#00ff88",
+              fontFamily: "'JetBrains Mono', monospace",
+              marginBottom: "4px",
+            }}
+          >
+            ✓ Synced from Google Sheets
+          </div>
+        )}
+        {isLoading && (
+          <div
+            style={{
+              fontSize: "10px",
+              color: "#888",
+              fontFamily: "'JetBrains Mono', monospace",
+              marginBottom: "4px",
+            }}
+          >
+            ⟳ Loading from cloud...
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
           <span
             data-ocid="collection.card"
             style={{
@@ -617,7 +859,9 @@ function CollectionPage({
               fontFamily: "'JetBrains Mono', monospace",
             }}
           >
-            {entries.length} {entries.length === 1 ? "entry" : "entries"}
+            {isLoading
+              ? "..."
+              : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`}
           </span>
         </div>
       </div>
@@ -851,7 +1095,7 @@ function CollectionPage({
               fontFamily: "'JetBrains Mono', monospace",
             }}
           >
-            Switch to Home to add entries
+            Switch to Home tab to add entries for today
           </div>
         </div>
       ) : (
@@ -883,6 +1127,36 @@ interface AdvanceRecord {
   upi: number;
   notes: string;
   commission: number;
+}
+
+function labelToPeriodKey(label: string, dateStr?: string): string {
+  if (/^\d{4}-\d{2}$/.test(label)) return label;
+  const monthNames = [
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+  ];
+  const match = label.toLowerCase().match(/12\s+([a-z]+)/);
+  if (!match) return getCurrentPeriodKey();
+  const monthIdx = monthNames.indexOf(match[1].slice(0, 3));
+  if (monthIdx === -1) return getCurrentPeriodKey();
+  let year = new Date().getFullYear();
+  if (dateStr) {
+    const parts = dateStr.split(/[-/]/);
+    if (parts.length === 3) {
+      year = parts[0].length === 4 ? Number(parts[0]) : Number(parts[2]);
+    }
+  }
+  return `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
 }
 
 // Period runs from 12th of one month to 11th of next month
@@ -927,6 +1201,7 @@ function AdvancePaymentPage({
   setAdminPin,
   pinUnlocked,
   setPinUnlocked,
+  scriptUrl,
 }: {
   trainers: AdvanceTrainer[];
   setTrainers: React.Dispatch<React.SetStateAction<AdvanceTrainer[]>>;
@@ -938,7 +1213,31 @@ function AdvancePaymentPage({
   setAdminPin: React.Dispatch<React.SetStateAction<string>>;
   pinUnlocked: boolean;
   setPinUnlocked: React.Dispatch<React.SetStateAction<boolean>>;
+  scriptUrl: string;
 }) {
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [advFetchError, setAdvFetchError] = useState(false);
+
+  const refreshRecords = async () => {
+    if (!scriptUrl) return;
+    setIsRefreshing(true);
+    setAdvFetchError(false);
+    const fetched = await fetchAdvanceRecordsFromSheet(scriptUrl);
+    if (fetched !== null) {
+      setRecords(fetched);
+      setAdvFetchError(false);
+    } else {
+      setAdvFetchError(true);
+    }
+    setIsRefreshing(false);
+  };
+
+  // Refresh when tab becomes active
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only
+  useEffect(() => {
+    refreshRecords();
+  }, []);
+
   // PIN state
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState("");
@@ -1091,7 +1390,7 @@ function AdvancePaymentPage({
           trainerName,
           period: getPeriodLabel(newRecord.periodKey),
           amount: newRecord.amount,
-          date: newRecord.date,
+          date: formatDateDMY(newRecord.date),
           byHand: newRecord.byHand,
           upi: newRecord.upi,
           notes: newRecord.notes,
@@ -1310,6 +1609,25 @@ function AdvancePaymentPage({
   // Main content
   return (
     <div>
+      {advFetchError && (
+        <div
+          style={{
+            backgroundColor: "#fbbf24",
+            color: "#1a1a00",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: "11px",
+            fontWeight: "bold",
+            padding: "8px 10px",
+            borderRadius: "6px",
+            marginBottom: "10px",
+            lineHeight: "1.5",
+          }}
+        >
+          ⚠ Cloud sync not working. Go to Settings, copy the Apps Script code,
+          redeploy it in Google Apps Script (Deploy → New version → Anyone
+          access), then update the URL here.
+        </div>
+      )}
       {/* Header */}
       <div
         style={{
@@ -1342,6 +1660,27 @@ function AdvancePaymentPage({
           >
             12th–12th salary cycle
           </div>
+        </div>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <button
+            type="button"
+            data-ocid="advance.button"
+            onClick={refreshRecords}
+            disabled={isRefreshing}
+            style={{
+              backgroundColor: "#141414",
+              border: "1px solid #222",
+              borderRadius: "6px",
+              color: isRefreshing ? "#444" : "#888",
+              fontFamily: mono,
+              fontSize: "10px",
+              padding: "6px 10px",
+              cursor: isRefreshing ? "default" : "pointer",
+              letterSpacing: "0.05em",
+            }}
+          >
+            {isRefreshing ? "⟳ Syncing..." : "⟳ Refresh"}
+          </button>
         </div>
         <button
           type="button"
@@ -1835,6 +2174,98 @@ function AdvancePaymentPage({
                           borderTop: "1px solid #1e1e1e",
                         }}
                       >
+                        {/* Monthly Summary */}
+                        {trainerRecords.length > 0 && (
+                          <div
+                            style={{
+                              backgroundColor: "#0a1a0e",
+                              border: "1px solid #00ff8833",
+                              borderRadius: "6px",
+                              padding: "12px",
+                              marginBottom: "16px",
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: "10px",
+                                color: "#555",
+                                fontFamily: "'JetBrains Mono', monospace",
+                                letterSpacing: "0.1em",
+                                textTransform: "uppercase",
+                                marginBottom: "8px",
+                              }}
+                            >
+                              Monthly Summary
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "22px",
+                                fontWeight: 800,
+                                color: "#00ff88",
+                                fontFamily: "'JetBrains Mono', monospace",
+                                marginBottom: "10px",
+                              }}
+                            >
+                              ₹{trainerTotal.toLocaleString("en-IN")}
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: "4px",
+                              }}
+                            >
+                              {trainerRecords.map((r) => (
+                                <div
+                                  key={r.id}
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    fontSize: "12px",
+                                    fontFamily: "'JetBrains Mono', monospace",
+                                    color: "#aaa",
+                                    padding: "3px 0",
+                                    borderBottom: "1px solid #1a1a1a",
+                                  }}
+                                >
+                                  <span>{r.date || "—"}</span>
+                                  <span
+                                    style={{
+                                      color: "#e0e0e0",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    ₹{r.amount.toLocaleString("en-IN")}
+                                    {r.byHand > 0 && (
+                                      <span
+                                        style={{
+                                          color: "#555",
+                                          fontSize: "10px",
+                                        }}
+                                      >
+                                        {" "}
+                                        (cash ₹
+                                        {r.byHand.toLocaleString("en-IN")})
+                                      </span>
+                                    )}
+                                    {r.upi > 0 && (
+                                      <span
+                                        style={{
+                                          color: "#a78bfa",
+                                          fontSize: "10px",
+                                        }}
+                                      >
+                                        {" "}
+                                        (UPI ₹{r.upi.toLocaleString("en-IN")})
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Entry Form */}
                         {!isClosed && (
                           <div style={{ marginBottom: "16px" }}>
@@ -2156,6 +2587,8 @@ export default function App() {
       return [];
     }
   });
+  const [entriesLoading, setEntriesLoading] = useState(false);
+  const [_advanceLoading, setAdvanceLoading] = useState(false);
 
   // Manual form
   const [manualName, setManualName] = useState("");
@@ -2175,6 +2608,29 @@ export default function App() {
     if (!localStorage.getItem("akpack_webhook_url")) {
       localStorage.setItem("akpack_webhook_url", APPS_SCRIPT_URL);
     }
+  }, []);
+
+  // Fetch today's entries from Google Sheets on mount
+  useEffect(() => {
+    const url = localStorage.getItem("akpack_webhook_url") || APPS_SCRIPT_URL;
+    if (!url) return;
+    const todayStr = new Date().toISOString().split("T")[0];
+    setEntriesLoading(true);
+    fetchEntriesFromSheet(todayStr, url).then((fetched) => {
+      if (fetched !== null && fetched.length > 0) {
+        setEntries(fetched);
+        localStorage.setItem(getTodayKey(), JSON.stringify(fetched));
+      }
+      setEntriesLoading(false);
+    });
+    // Also fetch advance records
+    setAdvanceLoading(true);
+    fetchAdvanceRecordsFromSheet(url).then((fetched) => {
+      if (fetched !== null && fetched.length > 0) {
+        setAdvanceRecords(fetched);
+      }
+      setAdvanceLoading(false);
+    });
   }, []);
 
   // Persist entries
@@ -2246,6 +2702,7 @@ export default function App() {
         body: JSON.stringify({
           action: "save",
           sheet: "Accounts",
+          id: newEntry.id,
           name: newEntry.name,
           memberId: newEntry.memberId,
           type: newEntry.type,
@@ -2327,18 +2784,33 @@ export default function App() {
           >
             AK <span style={{ color: COLOR_CASH }}>Pack</span>
           </h1>
-          <div
-            style={{
-              backgroundColor: "#141414",
-              border: "1px solid #222",
-              borderRadius: "20px",
-              padding: "6px 12px",
-              fontSize: "11px",
-              color: "#888",
-              fontFamily: "'JetBrains Mono', monospace",
-            }}
-          >
-            {formatDate()}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {entriesLoading && (
+              <div
+                data-ocid="home.loading_state"
+                style={{
+                  fontSize: "10px",
+                  color: "#555",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  animation: "pulse 1.2s ease-in-out infinite",
+                }}
+              >
+                syncing...
+              </div>
+            )}
+            <div
+              style={{
+                backgroundColor: "#141414",
+                border: "1px solid #222",
+                borderRadius: "20px",
+                padding: "6px 12px",
+                fontSize: "11px",
+                color: "#888",
+                fontFamily: "'JetBrains Mono', monospace",
+              }}
+            >
+              {formatDate()}
+            </div>
           </div>
         </header>
 
@@ -2913,136 +3385,226 @@ export default function App() {
                         whiteSpace: "pre-wrap",
                         wordBreak: "break-all",
                       }}
-                    >{`function doGet(e) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Members");
-  if (!sheet) return respond(null);
-  var data = sheet.getDataRange().getValues();
-  var headers = data[0].map(function(h){ return String(h).trim().toLowerCase(); });
-  var idCol   = headers.indexOf("membership id");
-  var nameCol = headers.indexOf("client name");
-  if (idCol === -1 || nameCol === -1) return respond(null);
-  var name = (e.parameter.name||"").toLowerCase();
-  var id   = e.parameter.id || "";
-  for (var i = 1; i < data.length; i++) {
-    var rowId   = String(data[i][idCol]);
-    var rowName = String(data[i][nameCol]);
-    if (id && rowId === id) return respond({ memberId: rowId, name: rowName });
-    if (name && rowName.toLowerCase() === name) return respond({ memberId: rowId, name: rowName });
-  }
-  return respond(null);
-}
+                    >{`var SPREADSHEET_ID = '1No1CQ_w2aI8__AH2yG1JyNtQeHGwl7fGOfpREPk_Cy4';
 
-function getISTDateTime() {
-  var now = new Date();
-  var istMs = now.getTime() + (5.5 * 60 * 60 * 1000);
-  var ist = new Date(istMs);
-  var dd = String(ist.getUTCDate()).padStart(2,"0");
-  var mm = String(ist.getUTCMonth()+1).padStart(2,"0");
-  var yyyy = ist.getUTCFullYear();
-  var hh = String(ist.getUTCHours()).padStart(2,"0");
-  var mi = String(ist.getUTCMinutes()).padStart(2,"0");
-  var ss2 = String(ist.getUTCSeconds()).padStart(2,"0");
-  return { date: dd+"-"+mm+"-"+yyyy, time: hh+":"+mi+":"+ss2+" IST" };
+function doGet(e) {
+  var action = e.parameter.action || "";
+  if (action === "getEntries") return handleGetEntries(e);
+  return respond({ status: "ok", message: "Connected" });
 }
 
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     var sheetName = data.sheet || "Accounts";
-    var sheet = ss.getSheetByName(sheetName);
-    if (!sheet) { sheet = ss.insertSheet(sheetName); }
-    if (sheetName === "Accounts") {
-      if (sheet.getLastRow() === 0) {
-        sheet.appendRow(["Name","Membership ID","Type","Cash","UPI","Note","Timestamp","Action","Entry ID"]);
-      }
-      // If action is "update", find the row with matching Entry ID and update it
-      if (data.action === "update" && data.id) {
-        var allRows = sheet.getDataRange().getValues();
-        var headers2 = allRows[0];
-        var entryIdCol = headers2.indexOf("Entry ID");
-        if (entryIdCol !== -1) {
-          for (var r = 1; r < allRows.length; r++) {
-            if (String(allRows[r][entryIdCol]) === String(data.id)) {
-              var rowNum = r + 1;
-              sheet.getRange(rowNum, headers2.indexOf("Name")+1).setValue(data.name || "");
-              sheet.getRange(rowNum, headers2.indexOf("Membership ID")+1).setValue(data.memberId || "");
-              sheet.getRange(rowNum, headers2.indexOf("Type")+1).setValue(data.type || "");
-              sheet.getRange(rowNum, headers2.indexOf("Cash")+1).setValue(data.cash || 0);
-              sheet.getRange(rowNum, headers2.indexOf("UPI")+1).setValue(data.upi || 0);
-              sheet.getRange(rowNum, headers2.indexOf("Note")+1).setValue(data.note || "");
-              sheet.getRange(rowNum, headers2.indexOf("Timestamp")+1).setValue(data.timestamp || new Date().toISOString());
-              sheet.getRange(rowNum, headers2.indexOf("Action")+1).setValue("updated");
-              return respond({ status: "ok", updated: true });
-            }
-          }
-        }
-      }
-      // Default: append new row
-      sheet.appendRow([
-        data.name || "",
-        data.memberId || "",
-        data.type || "",
-        data.cash || 0,
-        data.upi || 0,
-        data.note || "",
-        data.timestamp || new Date().toISOString(),
-        data.action || "save",
-        data.id || ""
-      ]);
-    } else if (sheetName === "Advance Payments") {
-      if (sheet.getLastRow() === 0) {
-        sheet.appendRow(["Trainer Name","Period","Amount","Date","By Hand","UPI","Notes","Commission","Status","Saved Date","Saved Time","Entry ID"]);
-      }
-      // If action is "update", find and update matching row
-      if (data.action === "update" && data.entryId) {
-        var apRows = sheet.getDataRange().getValues();
-        var apHeaders = apRows[0];
-        var apIdCol = apHeaders.indexOf("Entry ID");
-        if (apIdCol !== -1) {
-          for (var ar = 1; ar < apRows.length; ar++) {
-            if (String(apRows[ar][apIdCol]) === String(data.entryId)) {
-              var apRowNum = ar + 1;
-              sheet.getRange(apRowNum, apHeaders.indexOf("Trainer Name")+1).setValue(data.trainerName || data.trainer || "");
-              sheet.getRange(apRowNum, apHeaders.indexOf("Amount")+1).setValue(data.amount || 0);
-              sheet.getRange(apRowNum, apHeaders.indexOf("Date")+1).setValue(data.date || "");
-              sheet.getRange(apRowNum, apHeaders.indexOf("By Hand")+1).setValue(data.byHand || 0);
-              sheet.getRange(apRowNum, apHeaders.indexOf("UPI")+1).setValue(data.upi || 0);
-              sheet.getRange(apRowNum, apHeaders.indexOf("Notes")+1).setValue(data.notes || "");
-              sheet.getRange(apRowNum, apHeaders.indexOf("Commission")+1).setValue(data.commission || 0);
-              var istNow = getISTDateTime(); sheet.getRange(apRowNum, apHeaders.indexOf("Saved Date")+1).setValue(istNow.date); sheet.getRange(apRowNum, apHeaders.indexOf("Saved Time")+1).setValue(istNow.time);
-              return respond({ status: "ok", updated: true });
-            }
-          }
-        }
-      }
-      var istTs = getISTDateTime();
-      sheet.appendRow([
-        data.trainer || data.trainerName || "",
-        data.period || "",
-        data.amount || 0,
-        data.date || "",
-        data.byHand || 0,
-        data.upi || 0,
-        data.notes || "",
-        data.commission || 0,
-        data.status || "open",
-        data.savedDate || istTs.date,
-        data.savedTime || istTs.time,
-        data.entryId || ""
-      ]);
-    }
-    return respond({ status: "ok" });
+    if (sheetName === "Accounts") return handleAccounts(ss, data);
+    if (sheetName === "Advance Payments") return handleAdvance(ss, data);
+    return respond({ error: "Unknown sheet" });
   } catch(err) {
-    return respond({ status: "error", message: err.toString() });
+    return respond({ error: err.toString() });
   }
 }
 
+// ── Header helpers ──────────────────────────────────────────────────────────
+
+function getOrCreate(ss, name, headers) {
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.appendRow(headers);
+    sheet.getRange(1,1,1,headers.length).setFontWeight("bold");
+  } else if (sheet.getLastRow() === 0) {
+    sheet.appendRow(headers);
+    sheet.getRange(1,1,1,headers.length).setFontWeight("bold");
+  }
+  return sheet;
+}
+
+function colIdx(headers, name) {
+  var lc = headers.map(function(h){ return String(h).trim().toLowerCase(); });
+  return lc.indexOf(name.toLowerCase());
+}
+
+function findRowByCol(sheet, headers, colName, value) {
+  var ci = colIdx(headers, colName);
+  if (ci === -1) return -1;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][ci]).trim() === String(value).trim()) return i + 1;
+  }
+  return -1;
+}
+
+function setByHeader(sheet, rowNum, headers, obj) {
+  for (var key in obj) {
+    var ci = colIdx(headers, key);
+    if (ci !== -1) sheet.getRange(rowNum, ci + 1).setValue(obj[key]);
+  }
+}
+
+function appendByHeader(sheet, headers, obj) {
+  var row = new Array(headers.length).fill("");
+  for (var key in obj) {
+    var ci = colIdx(headers, key);
+    if (ci !== -1) row[ci] = obj[key];
+  }
+  sheet.appendRow(row);
+}
+
+// ── IST date/time ────────────────────────────────────────────────────────────
+
+function getIST() {
+  var now = new Date();
+  var ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+  var dd = String(ist.getUTCDate()).padStart(2,"0");
+  var mm = String(ist.getUTCMonth()+1).padStart(2,"0");
+  var yyyy = ist.getUTCFullYear();
+  var hh = String(ist.getUTCHours()).padStart(2,"0");
+  var mi = String(ist.getUTCMinutes()).padStart(2,"0");
+  var ss = String(ist.getUTCSeconds()).padStart(2,"0");
+  return { date: dd+"-"+mm+"-"+yyyy, time: hh+":"+mi+":"+ss+" IST" };
+}
+
+// ── Accounts ─────────────────────────────────────────────────────────────────
+
+var ACCOUNTS_HEADERS = ["Entry ID","Name","Membership ID","Type","Cash","UPI","Note","Timestamp"];
+
+function handleAccounts(ss, data) {
+  var sheet = getOrCreate(ss, "Accounts", ACCOUNTS_HEADERS);
+  var headers = sheet.getDataRange().getValues()[0].map(function(h){ return String(h).trim(); });
+
+  if (data.action === "update" && data.id) {
+    var rowNum = findRowByCol(sheet, headers, "Entry ID", data.id);
+    if (rowNum !== -1) {
+      setByHeader(sheet, rowNum, headers, {
+        "Name": data.name || "",
+        "Membership ID": data.memberId || "",
+        "Type": data.type || "",
+        "Cash": data.cash || 0,
+        "UPI": data.upi || 0,
+        "Note": data.note || "",
+        "Timestamp": data.timestamp || new Date().toISOString()
+      });
+      return respond({ status: "ok", updated: true });
+    }
+  }
+
+  appendByHeader(sheet, headers, {
+    "Entry ID": data.id || Utilities.getUuid(),
+    "Name": data.name || "",
+    "Membership ID": data.memberId || "",
+    "Type": data.type || "",
+    "Cash": data.cash || 0,
+    "UPI": data.upi || 0,
+    "Note": data.note || "",
+    "Timestamp": data.timestamp || new Date().toISOString()
+  });
+  return respond({ status: "ok", inserted: true });
+}
+
+// ── Advance Payments ──────────────────────────────────────────────────────────
+
+var AP_HEADERS = ["Entry ID","Trainer Name","Period","Amount","Date","By Hand","UPI","Notes","Commission","Status","Saved Date","Saved Time"];
+
+function handleAdvance(ss, data) {
+  var sheet = getOrCreate(ss, "Advance Payments", AP_HEADERS);
+  var headers = sheet.getDataRange().getValues()[0].map(function(h){ return String(h).trim(); });
+  var ist = getIST();
+
+  if (data.action === "update" && data.entryId) {
+    var rowNum = findRowByCol(sheet, headers, "Entry ID", data.entryId);
+    if (rowNum !== -1) {
+      setByHeader(sheet, rowNum, headers, {
+        "Trainer Name": data.trainerName || data.trainer || "",
+        "Period": data.period || "",
+        "Amount": data.amount || 0,
+        "Date": data.date || "",
+        "By Hand": data.byHand || 0,
+        "UPI": data.upi || 0,
+        "Notes": data.notes || "",
+        "Commission": data.commission || 0,
+        "Status": data.status || "open",
+        "Saved Date": ist.date,
+        "Saved Time": ist.time
+      });
+      return respond({ status: "ok", updated: true });
+    }
+  }
+
+  appendByHeader(sheet, headers, {
+    "Entry ID": data.entryId || Utilities.getUuid(),
+    "Trainer Name": data.trainerName || data.trainer || "",
+    "Period": data.period || "",
+    "Amount": data.amount || 0,
+    "Date": data.date || "",
+    "By Hand": data.byHand || 0,
+    "UPI": data.upi || 0,
+    "Notes": data.notes || "",
+    "Commission": data.commission || 0,
+    "Status": data.status || "open",
+    "Saved Date": data.savedDate || ist.date,
+    "Saved Time": data.savedTime || ist.time
+  });
+  return respond({ status: "ok", inserted: true });
+}
+
+// ── Get Entries ───────────────────────────────────────────────────────────────
+
+function handleGetEntries(e) {
+  try {
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var sheetName = e.parameter.sheet || "Accounts";
+    var sheet = ss.getSheetByName(sheetName);
+    if (!sheet || sheet.getLastRow() < 2) return respond([]);
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0].map(function(h){ return String(h).trim(); });
+    var rows = [];
+
+    if (sheetName === "Accounts") {
+      var dateFilter = e.parameter.date || "";
+      for (var i = 1; i < data.length; i++) {
+        var ts = String(data[i][colIdx(headers,"Timestamp")] || "");
+        if (dateFilter && !ts.startsWith(dateFilter)) continue;
+        rows.push({
+          id:       String(data[i][colIdx(headers,"Entry ID")] || ""),
+          name:     String(data[i][colIdx(headers,"Name")] || ""),
+          memberId: String(data[i][colIdx(headers,"Membership ID")] || ""),
+          type:     String(data[i][colIdx(headers,"Type")] || "cash"),
+          cash:     Number(data[i][colIdx(headers,"Cash")]) || 0,
+          upi:      Number(data[i][colIdx(headers,"UPI")]) || 0,
+          note:     String(data[i][colIdx(headers,"Note")] || ""),
+          time:     ts ? new Date(ts).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}) : ""
+        });
+      }
+    } else if (sheetName === "Advance Payments") {
+      for (var j = 1; j < data.length; j++) {
+        rows.push({
+          id:         String(data[j][colIdx(headers,"Entry ID")] || ""),
+          trainer:    String(data[j][colIdx(headers,"Trainer Name")] || ""),
+          trainerId:  String(data[j][colIdx(headers,"Trainer Name")] || ""),
+          period:     String(data[j][colIdx(headers,"Period")] || ""),
+          amount:     Number(data[j][colIdx(headers,"Amount")]) || 0,
+          date:       String(data[j][colIdx(headers,"Date")] || ""),
+          byHand:     Number(data[j][colIdx(headers,"By Hand")]) || 0,
+          upi:        Number(data[j][colIdx(headers,"UPI")]) || 0,
+          notes:      String(data[j][colIdx(headers,"Notes")] || ""),
+          commission: Number(data[j][colIdx(headers,"Commission")]) || 0,
+          status:     String(data[j][colIdx(headers,"Status")] || "open")
+        });
+      }
+    }
+    return respond(rows);
+  } catch(err) {
+    return respond({ error: err.message });
+  }
+}
+
+// ── Respond ───────────────────────────────────────────────────────────────────
+
 function respond(data) {
-  var out = data ? JSON.stringify(data) : "null";
   return ContentService
-    .createTextOutput(out)
+    .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }`}</pre>
                     <p
@@ -3064,7 +3626,11 @@ function respond(data) {
             </section>
           </>
         ) : activePage === "collection" ? (
-          <CollectionPage entries={entries} onEdit={setEditingEntry} />
+          <CollectionPage
+            todayEntries={entries}
+            onEdit={setEditingEntry}
+            scriptUrl={webhookInput}
+          />
         ) : (
           <AdvancePaymentPage
             trainers={advanceTrainers}
@@ -3077,6 +3643,7 @@ function respond(data) {
             setAdminPin={setAdminPin}
             pinUnlocked={pinUnlocked}
             setPinUnlocked={setPinUnlocked}
+            scriptUrl={webhookInput}
           />
         )}
 
