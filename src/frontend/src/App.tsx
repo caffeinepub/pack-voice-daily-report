@@ -151,18 +151,18 @@ async function fetchAdvanceRecordsFromSheet(
 
 async function fetchConfigFromSheet(
   scriptUrl: string,
-): Promise<{ adminPin?: string } | null> {
-  if (!scriptUrl) return null;
+): Promise<{ adminPin?: string; fetchSucceeded: boolean }> {
+  if (!scriptUrl) return { fetchSucceeded: false };
   try {
     const res = await fetch(`${scriptUrl}?action=getEntries&sheet=Config`);
-    if (!res.ok) return null;
+    if (!res.ok) return { fetchSucceeded: false };
     const data = await res.json();
-    if (!Array.isArray(data)) return null;
+    if (!Array.isArray(data)) return { fetchSucceeded: false };
     const pinRow = data.find((row: any) => row.key === "adminPin");
-    if (pinRow) return { adminPin: String(pinRow.value) };
-    return null;
+    if (pinRow) return { adminPin: String(pinRow.value), fetchSucceeded: true };
+    return { fetchSucceeded: true }; // fetch worked, no PIN set yet
   } catch {
-    return null;
+    return { fetchSucceeded: false };
   }
 }
 
@@ -1243,6 +1243,8 @@ function AdvancePaymentPage({
   setAdminPin,
   pinUnlocked,
   setPinUnlocked,
+  pinLoading = false,
+  pinFetchSuccess = false,
   scriptUrl,
 }: {
   trainers: AdvanceTrainer[];
@@ -1255,6 +1257,8 @@ function AdvancePaymentPage({
   setAdminPin: React.Dispatch<React.SetStateAction<string>>;
   pinUnlocked: boolean;
   setPinUnlocked: React.Dispatch<React.SetStateAction<boolean>>;
+  pinLoading?: boolean;
+  pinFetchSuccess?: boolean;
   scriptUrl: string;
 }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -1283,7 +1287,7 @@ function AdvancePaymentPage({
   // PIN state
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState("");
-  const [settingPin, setSettingPin] = useState(!adminPin);
+  const [settingPin, setSettingPin] = useState(false);
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [pinSetError, setPinSetError] = useState("");
@@ -1314,6 +1318,7 @@ function AdvancePaymentPage({
   // Filters
   const [filterTrainer, setFilterTrainer] = useState("all");
   const [filterMonth, setFilterMonth] = useState("all");
+  const [filterDate, setFilterDate] = useState("");
   const [commissionOnly, setCommissionOnly] = useState(false);
 
   const currentPeriodKey = getCurrentPeriodKey();
@@ -1327,6 +1332,7 @@ function AdvancePaymentPage({
   const filteredRecords = records.filter((r) => {
     if (filterTrainer !== "all" && r.trainerId !== filterTrainer) return false;
     if (filterMonth !== "all" && r.periodKey !== filterMonth) return false;
+    if (filterDate && r.date !== filterDate) return false;
     if (commissionOnly && r.commission <= 0) return false;
     return true;
   });
@@ -1337,7 +1343,10 @@ function AdvancePaymentPage({
   );
   const filteredTotalAmount = filteredRecords.reduce((s, r) => s + r.amount, 0);
   const hasActiveFilter =
-    filterTrainer !== "all" || filterMonth !== "all" || commissionOnly;
+    filterTrainer !== "all" ||
+    filterMonth !== "all" ||
+    !!filterDate ||
+    commissionOnly;
 
   function handleUnlock() {
     if (pinInput === adminPin) {
@@ -1647,7 +1656,20 @@ function AdvancePaymentPage({
                     ✕
                   </button>
                 </div>
-                {!adminPin && (
+                {pinLoading && (
+                  <div
+                    style={{
+                      color: "#888",
+                      fontSize: "11px",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      textAlign: "center",
+                      marginTop: "8px",
+                    }}
+                  >
+                    Loading PIN from server...
+                  </div>
+                )}
+                {!adminPin && !pinLoading && pinFetchSuccess && (
                   <button
                     type="button"
                     onClick={() => setSettingPin(true)}
@@ -1936,6 +1958,44 @@ function AdvancePaymentPage({
                 </option>
               ))}
             </select>
+          </div>
+        </div>
+        <div style={{ marginBottom: "8px" }}>
+          <label htmlFor="advance-filter-date" style={{ ...labelStyle }}>
+            Filter by Date
+          </label>
+          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+            <input
+              id="advance-filter-date"
+              type="date"
+              value={filterDate}
+              onChange={(e) => setFilterDate(e.target.value)}
+              data-ocid="advance.filter.date"
+              style={{
+                ...inputStyle,
+                padding: "8px 10px",
+                fontSize: "12px",
+                flex: 1,
+              }}
+            />
+            {filterDate && (
+              <button
+                type="button"
+                onClick={() => setFilterDate("")}
+                style={{
+                  backgroundColor: "#222",
+                  color: "#888",
+                  border: "1px solid #333",
+                  borderRadius: "7px",
+                  padding: "8px 10px",
+                  fontFamily: mono,
+                  fontSize: "11px",
+                  cursor: "pointer",
+                }}
+              >
+                ✕
+              </button>
+            )}
           </div>
         </div>
         <button
@@ -2682,6 +2742,8 @@ export default function App() {
     () => localStorage.getItem("akpack_admin_pin") || "",
   );
   const [pinUnlocked, setPinUnlocked] = useState(false);
+  const [pinLoading, setPinLoading] = useState(true);
+  const [pinFetchSuccess, setPinFetchSuccess] = useState(false);
 
   // Entries
   const [entries, setEntries] = useState<Entry[]>(() => {
@@ -2718,13 +2780,20 @@ export default function App() {
   // Sync admin PIN from Google Sheets on mount
   useEffect(() => {
     const url = localStorage.getItem("akpack_webhook_url") || APPS_SCRIPT_URL;
-    if (!url) return;
-    fetchConfigFromSheet(url).then((cfg) => {
-      if (cfg?.adminPin) {
-        setAdminPin(cfg.adminPin);
-        localStorage.setItem("akpack_admin_pin", cfg.adminPin);
-      }
-    });
+    if (!url) {
+      setPinLoading(false);
+      return;
+    }
+    fetchConfigFromSheet(url)
+      .then((cfg) => {
+        if (cfg.adminPin) {
+          setAdminPin(cfg.adminPin);
+          localStorage.setItem("akpack_admin_pin", cfg.adminPin);
+        }
+        if (cfg.fetchSucceeded) setPinFetchSuccess(true);
+        setPinLoading(false);
+      })
+      .catch(() => setPinLoading(false));
   }, []);
 
   // Fetch today's entries from Google Sheets on mount
@@ -3820,6 +3889,8 @@ function respond(data) {
             setAdminPin={setAdminPin}
             pinUnlocked={pinUnlocked}
             setPinUnlocked={setPinUnlocked}
+            pinLoading={pinLoading}
+            pinFetchSuccess={pinFetchSuccess}
             scriptUrl={webhookInput}
           />
         )}
