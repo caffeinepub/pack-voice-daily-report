@@ -149,9 +149,11 @@ async function fetchAdvanceRecordsFromSheet(
   }
 }
 
-async function fetchConfigFromSheet(
-  scriptUrl: string,
-): Promise<{ adminPin?: string; fetchSucceeded: boolean }> {
+async function fetchConfigFromSheet(scriptUrl: string): Promise<{
+  adminPin?: string;
+  trainers?: AdvanceTrainer[];
+  fetchSucceeded: boolean;
+}> {
   if (!scriptUrl) return { fetchSucceeded: false };
   try {
     const res = await fetch(`${scriptUrl}?action=getEntries&sheet=Config`);
@@ -159,11 +161,38 @@ async function fetchConfigFromSheet(
     const data = await res.json();
     if (!Array.isArray(data)) return { fetchSucceeded: false };
     const pinRow = data.find((row: any) => row.key === "adminPin");
-    if (pinRow) return { adminPin: String(pinRow.value), fetchSucceeded: true };
-    return { fetchSucceeded: true }; // fetch worked, no PIN set yet
+    const trainersRow = data.find((row: any) => row.key === "trainers");
+    let trainers: AdvanceTrainer[] | undefined;
+    if (trainersRow) {
+      try {
+        trainers = JSON.parse(String(trainersRow.value));
+      } catch {}
+    }
+    const adminPin = pinRow ? String(pinRow.value) : undefined;
+    return { adminPin, trainers, fetchSucceeded: true };
   } catch {
     return { fetchSucceeded: false };
   }
+}
+
+async function saveTrainersToSheet(
+  scriptUrl: string,
+  trainers: AdvanceTrainer[],
+): Promise<void> {
+  if (!scriptUrl) return;
+  try {
+    await fetch(scriptUrl, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "save",
+        sheet: "Config",
+        key: "trainers",
+        value: JSON.stringify(trainers),
+      }),
+    });
+  } catch {}
 }
 
 async function saveConfigToSheet(
@@ -1376,7 +1405,7 @@ function AdvancePaymentPage({
   function handleAddTrainer() {
     if (!newTrainerName.trim()) return;
     const t: AdvanceTrainer = {
-      id: Date.now().toString(),
+      id: newTrainerName.trim(),
       name: newTrainerName.trim(),
     };
     setTrainers((prev) => [...prev, t]);
@@ -2716,8 +2745,12 @@ export default function App() {
   const [advanceTrainers, setAdvanceTrainers] = useState<AdvanceTrainer[]>(
     () => {
       try {
-        return JSON.parse(
+        const loadedTrainers: AdvanceTrainer[] = JSON.parse(
           localStorage.getItem("akpack_advance_trainers") || "[]",
+        );
+        // Migrate old timestamp IDs to name-based IDs
+        return loadedTrainers.map((t) =>
+          /^\d{10,}$/.test(t.id) ? { ...t, id: t.name } : t,
         );
       } catch {
         return [];
@@ -2790,6 +2823,16 @@ export default function App() {
           setAdminPin(cfg.adminPin);
           localStorage.setItem("akpack_admin_pin", cfg.adminPin);
         }
+        if (cfg.trainers && cfg.trainers.length > 0) {
+          const migratedTrainers = cfg.trainers.map((t: AdvanceTrainer) =>
+            /^\d{10,}$/.test(t.id) ? { ...t, id: t.name } : t,
+          );
+          setAdvanceTrainers(migratedTrainers);
+          localStorage.setItem(
+            "akpack_advance_trainers",
+            JSON.stringify(migratedTrainers),
+          );
+        }
         if (cfg.fetchSucceeded) setPinFetchSuccess(true);
         setPinLoading(false);
       })
@@ -2829,6 +2872,10 @@ export default function App() {
       "akpack_advance_trainers",
       JSON.stringify(advanceTrainers),
     );
+    const url = localStorage.getItem("akpack_webhook_url") || APPS_SCRIPT_URL;
+    if (url && advanceTrainers.length > 0) {
+      saveTrainersToSheet(url, advanceTrainers);
+    }
   }, [advanceTrainers]);
   useEffect(() => {
     localStorage.setItem(
